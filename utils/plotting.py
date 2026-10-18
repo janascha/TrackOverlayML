@@ -10,6 +10,7 @@ This module provides visualization functions for:
 All plots follow ATLAS style guidelines using mplhep.
 """
 
+import os
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, auc, roc_auc_score
 from scipy.stats import spearmanr as sr
@@ -23,6 +24,134 @@ import mplhep as hep
 # =============================================================================
 # Statistical Error Calculations
 # =============================================================================
+
+def plot_features(df, output_dir):
+    print("Plotting input feature distributions")
+
+    plt.style.use(hep.style.ATLAS)
+
+    features = [
+        "Px",
+        "Py",
+        "Pz",
+        "E",
+        "Pt",
+        "R02",
+        "R05",
+        "sumR02",
+        "sumR05",
+        "sumpT02",
+        "sumpT05",
+        "w_numPU",
+        "TruthMultiplicity",
+        "eventPt",
+    ]
+
+    labels = {
+        "Px": r"$p_x$",
+        "Py": r"$p_y$",
+        "Pz": r"$p_z$",
+        "E": r"$E$",
+        "Pt": r"$p_T$",
+        "R02": r"$R02$",
+        "R05": r"$R05$",
+        "sumR02": r"$\Sigma \Delta R_{0.2}$",
+        "sumR05": r"$\Sigma \Delta R_{0.05}$",
+        "sumpT02": r"$\Sigma p_T^{0.2}$",
+        "sumpT05": r"$\Sigma p_T^{0.05}$",
+        "w_numPU": "Number of pile-up interactions",
+        "TruthMultiplicity": "Truth multiplicity",
+        "eventPt": r"Event $p_T$",
+    }
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    diffcheck = df[df["TargetLabel"] == 1]["E"]
+    print("Maximum E for Diff:", diffcheck.max())
+    print("Diff tracks with E > 500:", (diffcheck > 500).sum())
+    print("Diff tracks with E > 600:", (diffcheck > 600).sum())
+    nodiffcheck = df[df["TargetLabel"] == 0]["E"]
+    print("Maximum E for NoDiff:", nodiffcheck.max())
+    print("Maximum E for Diff:", diffcheck.max())
+
+    for feature in features:
+
+        nodiff = df[df["TargetLabel"] == 0][feature].to_numpy()
+        diff = df[df["TargetLabel"] == 1][feature].to_numpy()
+        # Remove NaN / inf values
+        nodiff = nodiff[np.isfinite(nodiff)]
+        diff = diff[np.isfinite(diff)]
+
+        fig, ax = plt.subplots()
+
+        # Use common binning for both distributions
+        all_values = np.concatenate([nodiff, diff])
+
+        bins = np.histogram_bin_edges(
+            all_values,
+            bins=50
+        )
+
+        ax.hist(
+            nodiff,
+            bins=bins,
+            histtype="step",
+            linewidth=1.5,
+            density=True,
+            label="NoDiff"
+        )
+
+        ax.hist(
+            diff,
+            bins=bins,
+            histtype="step",
+            linewidth=1.5,
+            density=True,
+            label="Diff"
+        )
+
+        log_features = [
+        "Pt",
+        "E",
+        "Px",
+        "Py",
+        "Pz",
+        "sumpT02",
+        "sumpT05",
+        "eventPt",
+        "sumR02",
+        "sumR05"
+        ]
+        if feature in log_features:
+            ax.set_yscale("log")
+        ax.set_xlabel(labels[feature])
+        ax.set_ylabel("Normalized entries")
+
+        ax.legend(frameon=False)
+
+        fig.savefig(
+            f"{output_dir}/feature_{feature}.pdf",
+            bbox_inches="tight"
+        )
+
+        plt.close(fig)
+
+
+
+def plot_eta(eta,dir):
+    print("Plotting eta distribution")
+
+    plt.style.use(hep.style.ATLAS)
+    fig,ax = plt.subplots()
+    
+    ax.hist(eta, bins=50, range=(-5, 5))
+
+    ax.set_xlabel(r"$\eta$")
+    ax.set_ylabel("Entries")
+
+    fig.savefig(f"{dir}/eta.pdf")
+    plt.close(fig)
+    
 
 def error(success, exp, eff):
     """
@@ -167,7 +296,7 @@ def plot_losses(history, dir, logfile):
     ax.legend(frameon=False)
     ax.grid(True, alpha=0.3)
     
-    plt.savefig(f"{dir}/loss_evolution.png", dpi=400, bbox_inches='tight')
+    plt.savefig(f"{dir}/loss_evolution.pdf",bbox_inches='tight')
     plt.close()
 
 
@@ -194,7 +323,7 @@ def plot_accuracy(history, dir, logfile):
     ax.legend(frameon=False)
     ax.grid(True, alpha=0.3)
     
-    plt.savefig(f"{dir}/acc_evolution.png", dpi=400, bbox_inches='tight')
+    plt.savefig(f"{dir}/acc_evolution.pdf", bbox_inches='tight')
     plt.close()
 
 
@@ -202,7 +331,7 @@ def plot_accuracy(history, dir, logfile):
 # Classification Performance Plots
 # =============================================================================
 
-def plot_scores(losses, testlabels, dir, logfile):
+def plot_scores(losses, testlabels, dir, logfile, track_threshold=None, track_quantile=None):
     """
     Plot ML discriminant score distributions for Diff and No Diff.
     
@@ -247,12 +376,34 @@ def plot_scores(losses, testlabels, dir, logfile):
         label="no Diff"
     )
     
-    ax.set_xlabel("ML Discriminant Score")
+    # 58% quantile of the true Diff distribution
+    diff_scores = losses[testlabels == 1.0]
+    #threshold = np.quantile(diff_scores, quantile)
+    
+    # Draw fixed threshold determined from validation sample
+    if track_threshold is not None:
+
+        if track_quantile is not None:
+            threshold_label = (
+                f"Validation {track_quantile:.0%} Diff quantile "
+                f"= {track_threshold:.3f}"
+            )
+        else:
+            threshold_label = f"Track threshold = {track_threshold:.3f}"
+    
+    ax.axvline(
+        track_threshold,
+        linestyle="--",
+        linewidth=2,
+        label=threshold_label
+    )
+    
+    ax.set_xlabel("Track classifier score")
     ax.set_ylabel("Arbitrary Units (Normalized)")
     ax.legend(frameon=False)
     ax.grid(True, alpha=0.3)
     
-    plt.savefig(f"{dir}/scores.png", dpi=400, bbox_inches='tight')
+    plt.savefig(f"{dir}/scores.pdf", bbox_inches='tight')
     plt.close()
 
 
@@ -299,7 +450,7 @@ def plot_ROC(losses, testlabels, dir, logfile):
     ax.set_title("ROC: Classification")
 
     plt.legend(frameon=False, loc="lower right")
-    plt.savefig(f"{dir}/roc.png", dpi=400)
+    plt.savefig(f"{dir}/roc.pdf")
     plt.clf()
 
 
@@ -352,11 +503,11 @@ def plot_roulette_score(score, roulThres, dir=None, logfile=None):
     y1, y2 = ax.get_ylim()
     ax.vlines(x=roulThres, ymin=y1, ymax=y2, color=colors)  # Draw threshold lines
     ax.set_ylim(y1, y2)
-    ax.set_xlabel("xScore")
+    ax.set_xlabel("Event xScore")
 
     ax.legend(cutpointer, cutlabels, frameon=False)
 
-    plt.savefig(f"{dir}/rouletteScore.png", dpi=400)
+    plt.savefig(f"{dir}/rouletteScore.pdf")
     plt.clf()
 
 
@@ -462,9 +613,9 @@ def plot_fast_fraction(isf, bins, observable, dir, logfile=None, **kwargs):
     ax.set_ylabel("Fraction to Fast Reconstruction", fontsize=15)
     ax.set_xlabel(f"{observable} {units}")
     ax.text(
-        np.quantile(bins, 0.75), 0.90, f"{sample} events\n-2.5 $\leq$ $\eta$ $\leq$ 2.5"
+        0.75, 0.90, f"{sample} events\n-2.5 $\leq$ $\eta$ $\leq$ 2.5"
     )
-    plt.savefig(f"{dir}/frac_{svp}_{quality}.png", dpi=600)
+    plt.savefig(f"{dir}/frac_{svp}_{quality}.pdf")
     plt.clf()
 
 
@@ -657,7 +808,7 @@ def plot_efficiencies(
     ax[1].set_ylabel(r"$\frac{Full-Hybrid}{Full-Fast}$")
     ax[1].legend(frameon=False, loc="upper right")
     
-    plt.savefig(f"{dir}/isf_{svp}_{quality}.png", dpi=600)
+    plt.savefig(f"{dir}/isf_{svp}_{quality}.pdf")
     plt.clf()
     
     print(
@@ -750,7 +901,7 @@ def plot_roulette_diagnostic(scores, avg_decision, dir=None, logfile=None, quali
     # Display efficiency metrics
     ax[0].text(f_tx, f_ty, f"$\epsilon_{{fast,fast}}: {fast_from_fast*100:3.2f}$%\n$\epsilon_{{fast,full}}: {fast_from_full*100:3.2f}$%\n$\epsilon: {total_to_fast*100:3.2f}$%", fontsize=12)
     ax[0].legend(frameon=False, loc="upper left", bbox_to_anchor=(0., 0.45, 0.5, 0.5))
-    plt.savefig(f"{dir}/profile_{svp}_{quality}.png", dpi=600)
+    plt.savefig(f"{dir}/profile_{svp}_{quality}.pdf")
     plt.clf()
 
 
@@ -845,5 +996,5 @@ def plot_jet_mismodelling(pts, dir=None, quality='generic', logfile=None,):
     ax.set_xticklabels(sbins[0::5], rotation=45)
     ax.set_ylim(-0.0005,0.02)
     ax.set_xlim(np.min(bin_centers), np.max(bin_centers))
-    plt.savefig(f"{dir}/ptmismodelling_{quality}.png", dpi=600)
+    plt.savefig(f"{dir}/ptmismodelling_{quality}.pdf")
     plt.show()

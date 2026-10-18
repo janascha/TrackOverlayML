@@ -31,7 +31,7 @@ def get_args():
     parser.add_argument(
         "--trainsplit",
         type=float,
-        default=0.8,
+        default=0.7,
         help="Fraction of full dataset used for training; rest for held-out test.",
     )
 
@@ -111,18 +111,6 @@ def get_args():
         type=str,
         default=None,
         help="Sample to use for evaluation (if different from training sample). Defaults to --sample.",
-    )
-    parser.add_argument(
-        "--matched_size",
-        type=int,
-        default=None,
-        help="Number of good match samples (TargetLabel=1, MatchProb>0.5) for evaluation. None uses all available.",
-    )
-    parser.add_argument(
-        "--unmatched_size",
-        type=int,
-        default=None,
-        help="Number of poor match samples (TargetLabel=0, MatchProb≤0.5) for evaluation. None uses all available.",
     )
 
     return parser.parse_args()

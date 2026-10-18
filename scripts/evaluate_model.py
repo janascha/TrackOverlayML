@@ -12,9 +12,12 @@ from tensorflow import keras
 from sklearn.preprocessing import MinMaxScaler
 
 from data.dataloader_multi import loadEvaluationData
-from utils.evaluator_multi import evaluate_performance, evaluate_event
+from utils.evaluator_multi import evaluate_performance, evaluate_event, permutation_importance
 from utils.args import get_args
+from utils.plotting import plot_features
 
+import glob
+import pandas as pd
 
 def main():
     args = get_args()
@@ -46,22 +49,84 @@ def main():
     if eval_sample != sample:
         print(f"  Note: Evaluating on different sample than training ({sample} → {eval_sample})")
     
+
+    matched_file = glob.glob(f"data/matched_{eval_sample}_data*.h5")[0]
+    unmatched_file = glob.glob(f"data/unmatched_{eval_sample}_data*.h5")[0]
+
+    df_matched = pd.read_hdf(matched_file)
+    df_unmatched = pd.read_hdf(unmatched_file)
+
+    df_full = pd.concat([df_matched, df_unmatched], axis=0 )
+
+    print("-----------CHECK STARTS --------------------------")
+    mc_only = df_full[
+        (df_full["w_hasMatch"] == True) &
+        (df_full["wo_hasMatch"] == False)
+    ]
+
+    track_only = df_full[
+        (df_full["w_hasMatch"] == False) &
+        (df_full["wo_hasMatch"] == True)
+    ]
+
+    print("MC-only Diff:", len(mc_only))
+    print("Track-only Diff:", len(track_only))
+
+    print("Maximum E, MC-only:", mc_only["E"].max())
+    print("Maximum E, Track-only:", track_only["E"].max())
+
+    print("Full unsampled dataframe:", df_full.shape)
+
+    diff = df_full[df_full["TargetLabel"] == 1]["E"]
+    nodiff = df_full[df_full["TargetLabel"] == 0]["E"]
+
+    print("Number NoDiff:", len(nodiff))
+    print("Number Diff:", len(diff))
+
+    print("Maximum E for NoDiff:", nodiff.max())
+    print("Maximum E for Diff:", diff.max())
+    
+    #classifier path
+    cl_dir = f"results/{sample}/classifier"
+    
+    threshold_path = f"{cl_dir}/track_threshold.pkl"
+    with open(threshold_path, "rb") as f:
+        threshold_info = pickle.load(f)
+    track_threshold = threshold_info["threshold"]
+    track_quantile = threshold_info["quantile"]
+
+    print(
+        f"Using fixed track threshold: {track_threshold:.6f} "
+        f"(derived from validation {track_quantile:.0%} quantile)" )
+    
+    # Decide which events to evaluate
+    event_ids = None
+    
+    if eval_sample == sample:
+        split_path = f"{cl_dir}/split_events.pkl"
+        with open(split_path, "rb") as f:
+            split_events = pickle.load(f)
+        event_ids = split_events["test"]
+        print(f"Using {len(event_ids)} test events")
+    else:
+        print(f"Evaluating independent sample {eval_sample}; using all events")
+    
+    test_events = split_events["test"]
+    
     # You can specify sample sizes to limit evaluation, or None to use all data
     F_eval, L_eval, feat_list, df_eval = loadEvaluationData(
-        path=path,
-        logfile=None,
-        sample=eval_sample,
-        use_densities=use_density,
-        pos_sample_size=args.matched_size,
-        neg_sample_size=args.unmatched_size
-    )
+        path=path,logfile=None,sample=eval_sample,use_densities=use_density,event_ids=event_ids,event_sample_size=None )
+    
+    #F_eval: numerical ML feature array
+    #L_eval: TargetLabel values
+    #feat_list: names of the features
+    #df_eval: original/full Pandas DataFrame, needed for the later event-level evaluation -> needs the complete dataframe
     
     print(f"Evaluation data loaded: {F_eval.shape}")
-    if args.matched_size or args.unmatched_size:
-        print(f"  Using subset: matched={args.matched_size or 'all'}, unmatched={args.unmatched_size or 'all'}")
+    
+    plot_features(df_eval, f"results/{sv_dir}/plots")
     
     # Load trained model
-    cl_dir = f"results/{sample}/classifier"
     model_path = f"{cl_dir}/classifier.h5"
     
     if not os.path.exists(model_path):
@@ -70,8 +135,18 @@ def main():
             f"Please run train_model.py first."
         )
     
+    #sample identifies which trained classifier to load, while eval_sample identifies which dataset to test it on
+    
     print(f"Loading model from {model_path}")
     trkPredictor = keras.models.load_model(model_path)
+    
+    # Load the scaler
+    scaler_path = f"{cl_dir}/scaler.pkl"
+    with open(scaler_path, "rb") as f:
+        scaler = pickle.load(f)
+    F_eval = scaler.transform(F_eval)
+    
+
     
     # Load training history if available
     history_path = f"{cl_dir}/history.pkl"
@@ -100,8 +175,20 @@ def main():
         labels=L_eval,
         history=history,
         logfile=logfile,
-        isTraining=True
+        isTraining=True,
+        track_threshold=track_threshold,
+        track_quantile=track_quantile
     )
+    
+    # Feature importance --- (SLOW!)
+    print("\n=== Feature importance ===", file=logfile, flush=True)
+
+    nominal_auc, importances = permutation_importance(trkPredictor,F_eval,L_eval,feat_list,n_repeats=10)
+    print(f"Nominal AUC: {nominal_auc:.4f}", file=logfile)
+
+    for item in importances:
+        print(f"{item['feature']:20s} "f"{item['importance']:.5f} +/- {item['std']:.5f}", file=logfile)
+    #--
     
     # Event-level evaluation
     print("\n=== Event-level evaluation ===", file=logfile, flush=True)
@@ -110,8 +197,8 @@ def main():
     print(f"Using loaded dataframe with {len(df_eval)} samples", file=logfile, flush=True)
     
     # Create scalers for the evaluation data
-    FS = MinMaxScaler()
-    CS = MinMaxScaler()  # Dummy conditional scaler if needed
+    #FS = MinMaxScaler()
+    #CS = MinMaxScaler()  # Dummy conditional scaler if needed
     
     dec_kwargs = {
         "smoothing": temperature,
@@ -122,10 +209,12 @@ def main():
         df_eval,
         trkPredictor,
         use_density,
-        (FS, CS),
+        scaler,
+        #(FS, CS),
         sv_dir,
         xscore,
         args.evtmix,
+        track_threshold,
         logfile,
         **dec_kwargs
     )

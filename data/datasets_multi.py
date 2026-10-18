@@ -10,7 +10,8 @@ This module provides dataset wrappers that:
 
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import MinMaxScaler
+#from sklearn.preprocessing import MinMaxScaler
+from data.features import get_feature_names
 
 
 class xRIMdataset:
@@ -49,30 +50,34 @@ class xRIMdataset:
             features: Scaled feature array (MinMax normalized to [0, 1])
             feat_list: List of feature names
         """
-        feat = 14 if self.use_densities else 5
-        feat_list = ["px", "py", "pz", "E", "$P_T$"]
-        features = np.zeros((self.df.shape[0], feat))
+        
+        feat_list = get_feature_names(self.use_densities)
+        features = self.df[feat_list].to_numpy(dtype=float)
+        
+        #feat = 14 if self.use_densities else 5
+        #feat_list = ["px", "py", "pz", "E", "$P_T$"]
+        #features = np.zeros((self.df.shape[0], feat))
 
         # Basic kinematics
-        features[:, 0] = self.df["Px"]
-        features[:, 1] = self.df["Py"]
-        features[:, 2] = self.df["Pz"]
-        features[:, 3] = self.df["E"]
-        features[:, 4] = self.df["Pt"]
+        #features[:, 0] = self.df["Px"]
+        #features[:, 1] = self.df["Py"]
+        #features[:, 2] = self.df["Pz"]
+        #features[:, 3] = self.df["E"]
+        #features[:, 4] = self.df["Pt"]
         
         # Add density features if requested
-        if self.use_densities:
-            features[:, 5] = self.df["R02"]
-            features[:, 6] = self.df["R05"]
-            features[:, 7] = self.df["sumR02"]
-            features[:, 8] = self.df["sumR05"]
-            features[:, 9] = self.df["sumpT02"]
-            features[:,10] = self.df["sumpT05"]
-            features[:,11] = self.df["w_numPU"]
-            features[:,12] = self.df["TruthMultiplicity"]
-            features[:,13] = self.df["eventPt"]
-            feat_list += ["R02", "R05", "sumR02", "sumR05", "sumpT02", "sumpT05", 
-                          "w_numPU", "TruthMultiplicity", "eventPt"]
+        #if self.use_densities:
+            #features[:, 5] = self.df["R02"]
+            #features[:, 6] = self.df["R05"]
+            #features[:, 7] = self.df["sumR02"]
+            #features[:, 8] = self.df["sumR05"]
+            #features[:, 9] = self.df["sumpT02"]
+            #features[:,10] = self.df["sumpT05"]
+            #features[:,11] = self.df["w_numPU"]
+            #features[:,12] = self.df["TruthMultiplicity"]
+            #features[:,13] = self.df["eventPt"]
+            #feat_list += ["R02", "R05", "sumR02", "sumR05", "sumpT02", "sumpT05", 
+            #              "w_numPU", "TruthMultiplicity", "eventPt"]
         
         # Log feature ranges before scaling
         feature_min = np.min(features, axis=0)
@@ -83,9 +88,9 @@ class xRIMdataset:
                   file=logfile, flush=True)
         
         # Apply MinMax scaling to [0, 1]
-        Fscaler = MinMaxScaler()
-        self.fscaler = Fscaler
-        features = Fscaler.fit_transform(features)
+        #Fscaler = MinMaxScaler()
+        #self.fscaler = Fscaler
+        #features = Fscaler.fit_transform(features)
         
         return features, feat_list
 

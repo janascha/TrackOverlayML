@@ -9,14 +9,69 @@ import datetime
 import functools
 import operator
 from numpy import argmax
+from sklearn.preprocessing import MinMaxScaler
+
+def split_by_event(df, train_fraction=0.8, random_state=1):
+
+    val_fraction = (1.0 - train_fraction) / 2.0
+    test_fraction = val_fraction
+
+    # One entry per event.
+    # Use "contains at least one Diff track" for stratification.
+    event_info = df.groupby(level="EvtNumber")["TargetLabel"].max()
+
+    event_ids = event_info.index.to_numpy()
+    event_has_diff = event_info.to_numpy()
+
+    # First split: train vs validation+test
+    train_events, temp_events, _, temp_labels = train_test_split(
+        event_ids,
+        event_has_diff,
+        train_size=train_fraction,
+        random_state=random_state,
+        stratify=event_has_diff
+    )
+
+    # Second split: validation vs test
+    val_events, test_events = train_test_split(
+        temp_events,
+        test_size=0.5,
+        random_state=random_state,
+        stratify=temp_labels
+    )
+
+    # Convert event selections back into row selections
+    row_event_ids = df.index.get_level_values("EvtNumber")
+
+    train_df = df[row_event_ids.isin(train_events)].copy()
+    val_df   = df[row_event_ids.isin(val_events)].copy()
+    test_df  = df[row_event_ids.isin(test_events)].copy()
+
+    split_events = {
+        "train": train_events,
+        "validation": val_events,
+        "test": test_events
+    }
+
+    return train_df, val_df, test_df, split_events
 
 def compute_density(distances, mask, R, path, logfile=None):
+    
+    #compute local track density inside a cone of radius \(R\)
+     
+    #create masked array where every distance smaller than \(R\) is masked
     distances = np.ma.masked_where(distances < R, distances) #masked array where elements that distances< R
+    
+    #count how many tracks lie within radius \(R\)
     density = np.sum(distances.mask, axis=1) # count up the number of masked elements
+    
+    #divides the neighbor count by the area
     density = density / (np.pi * R ** 2)
 
     density = np.ma.masked_array(density, mask=mask)
     density = density.compressed()
+
+    #return a flat 1D array of densities, after having removed the mask entries
     return density
 
 def compute_pt(pt, myDistrances, mask, R, path, logfile=None):
@@ -47,22 +102,46 @@ def get_densities(df_ep, pt, R, path, logfile=None):
 
     if not isinstance(R, list):
         R = [R]
+    
+    #save the mask of nonexistent particles
     mask = df_ep[:, :, 0].mask
+    
+    #this is a trick to avoid nested loops, the goal is to cretae pair-wise calculations of deltaR
     df_ep = np.expand_dims(df_ep, -2) #Negative value: inserted at that position, counting from the right
     df_ep_T = df_ep.transpose(0, 2, 1, 3)
+    
+    #this gives the pairwise differences
     abs_distance = np.abs(df_ep - df_ep_T) #abs_distance[i,j,k,:] corresponds to the absolute distance between track j and k in event i
     # computes the minimum angular distance between the two particles to ensure the shortest distance 
+    
+    #Correct the periodic nature of Phi, give the shortest angular separation.
     abs_distance[:, :, :, 1] = np.minimum(
         2 * np.pi - abs_distance[:, :, :, 1], abs_distance[:, :, :, 1]
     )
+    
+    
+    #das gibt schliesslich deltaR
     distances = np.sqrt(np.sum(np.power(abs_distance, 2), axis=-1))
-    # replaces distances of 0.0 with 999
+    
+    #copies the original distance matrix (0 for the diagonals),
     myDistances = distances
+    
+    # replaces distances of 0.0 with 999 (NOTE this also replaces the 0 for non-diagonals). FIX???
     distances = np.where(distances == 0.0, distances + 999, distances)
+    
+    #calculations!
+    
+    #count-density feature
+    #how many neighboring tracks are within radius \(R\) and divides that count by the area:
     collect= [compute_density(distances, mask, r, path, logfile) for r in R]
+    
+    #scalar \(p_T\) sum of neighboring tracks within the chosen radius R
     pt_around_track = [compute_pt(pt, myDistances, mask, r, path, logfile) for r in R]
+    
+    #sums the actual pairwise distances inside the radius and divide by the area pi*R^2
     sum_collect = [compute_sumDensity(distances, mask, r, path, logfile) for r in R]
-    #return collect
+    
+    #return collect, 6 density/environment-related quantities that are subsequently added back into newData
     return collect, sum_collect, pt_around_track
 
 def prepxRIMdata(path, logfile=None, isTraining=True, sample="JZ7W"):
@@ -79,20 +158,41 @@ def prepxRIMdata(path, logfile=None, isTraining=True, sample="JZ7W"):
     newData (pd.DataFrame): A dataframe containing all the data from the csv files in the path.
 
     """
+    print("prepxRIMdata path ",path)
+    #path="/work/track_overlay/TrackOverlayML/data"
     
     print("Creating the h5 files.", file=logfile, flush=True)
     t0 = time.time()
+    
+    #these names are a bit weird
     wpath_to_data = f"{path}/MC-overlay_{sample}/"
     wopath_to_data = f"{path}/Track-overlay_{sample}/"
 
+    print("prepxRIMdata 1")
+    print(wpath_to_data)
+    
     #Glob all the csvs in the path corresponding to pu or no pu (MC or Track)
+    #Find all CSV files in those directories
     pucsvlist = glob.glob(wpath_to_data + "*.csv")
+    print("pucsvlist created")
     wopucsvlist = glob.glob(wopath_to_data + "*.csv")
+    print("wopucsvlist created")
+    
+    
     print(f"pucsvlist files:{len(pucsvlist)}", file=logfile, flush=True)
     print(f"wopucsvlist files:{len(wopucsvlist)}", file=logfile, flush=True)
+    print(pucsvlist)
+    
+    #Read and concatenate all CSV files
+    #For every filename in pucsvlist, read that CSV into a Pandas DataFrame.
+    #
     pileup = pd.concat([pd.read_csv(csv) for csv in pucsvlist])
+    print("pileup concatenated")
     nopileup = pd.concat([pd.read_csv(csv) for csv in wopucsvlist])
-
+    print("nopileup concatenated")
+    
+    print("prepxRIMdata 2")
+    
     # print(pileup.columns, file=logfile, flush=True)
     t1 = time.time()
     print(
@@ -101,22 +201,27 @@ def prepxRIMdata(path, logfile=None, isTraining=True, sample="JZ7W"):
         flush=True,
     )
 
+    print("prepxRIMdata 3")
+    
     #Sort the dataframes by the event number - this makes it easier to match the pu and no pu data.
     #Additionally use Px to sort the dataframe - This makes sure that the data is sorted in the same way for both pu and no pu data and the most
     #relavant truth come first. (i.e. those with the highest Px (or maybe alternatitely Pt?))
-    #if isTraining:
+    
     pileup = pileup.sort_values(by=["EvtNumber", "Px"])
+    
     pileup["hasMatch"] = pileup["MatchProb"] > 0.5
     pileup.columns = list(pileup.columns[:9]) + [
         "w_" + string for string in pileup.columns.values[9:]
     ]
-
+    
+    print("prepxRIMdata 4")
+    
     phi = np.arctan2(pileup["Py"], pileup["Px"])
     phi = np.where(phi > np.pi, phi - 2 * np.pi, phi)
     phi = np.where(phi <= -np.pi, phi + 2 * np.pi, phi)
 
     pileup["Phi"] = phi
-    #if isTraining:
+    
     nopileup = nopileup.sort_values(by=["EvtNumber", "Px"])
     nopileup["hasMatch"] = nopileup["MatchProb"] > 0.5
     nopileup.columns = list(nopileup.columns[:9]) + [
@@ -125,26 +230,51 @@ def prepxRIMdata(path, logfile=None, isTraining=True, sample="JZ7W"):
     print(nopileup[["wo_hasMatch"]].head())
     print(nopileup.columns[9:])
 
+    #The next logical step is where it finds events that exist in both samples and checks whether MC Overlay and Track Overlay are properly aligned.
     #Get unique eventIDs from the two samples - We would use this to match the pu and no pu data and tally
+    # unique() takes the EvtNumber column from the MC Overlay DataFrame and returns each event number only once.
+    
     puevts = pileup["EvtNumber"].unique()
     wopuevts = nopileup["EvtNumber"].unique()
+    
     #Get the eventIDs that are common to both samples
+    #np.intersect1d() gives the values appearing in both arrays.
     matchedevents = np.intersect1d(puevts, wopuevts)
+
     #Get the truth data for the matched events
     pileup = pileup[pileup["EvtNumber"].isin(matchedevents)]
     nopileup = nopileup[nopileup["EvtNumber"].isin(matchedevents)]
+
     print(f"Total matched events in two samples: {matchedevents.shape}", file=logfile, flush=True)
 
     assert matchedevents.shape[0] > 0, "No matched events found. Please check the data."
 
 
     # Make sure the events are all lined up. This is important for the matching of the pu and no pu data.
-    assert (
-        nopileup["EvtNumber"].values - pileup["EvtNumber"].values
-    ).sum() == 0, "Events Misalligned. Check CSV creation/AODs"
-    assert (
-        nopileup["PdgID"].values - pileup["PdgID"].values
-    ).sum() == 0, "Truths Misalligned. Check CSV creation"
+    assert len(nopileup) == len(pileup), "Different number of truth particles in MC Overlay and Track Overlay"
+    assert np.array_equal(nopileup["EvtNumber"].to_numpy(),pileup["EvtNumber"].to_numpy()), \
+    "Events misaligned. Check CSV creation/AODs"
+    assert np.array_equal(nopileup["PdgID"].to_numpy(),pileup["PdgID"].to_numpy()), \
+    "Truth particles misaligned. Check CSV creation"
+    
+    assert np.allclose(nopileup["Px"].to_numpy(),pileup["Px"].to_numpy(),rtol=1e-7,atol=1e-10), \
+    "Truth Px values misaligned. Check CSV creation"
+    
+    #assert (
+    #    nopileup["EvtNumber"].values - pileup["EvtNumber"].values
+    #).sum() == 0, "Events Misalligned. Check CSV creation/AODs"
+    
+    #chat gpt says this is not a safe check. better would be
+    #assert np.array_equal( nopileup["EvtNumber"].values, pileup["EvtNumber"].values ), "Events misaligned. Check CSV creation."
+		#print("EvtNumber alignment check passed.")
+		#because np.array_equal(...) checks every element individually, rather than allowing positive and negative differences to cancel.
+    
+    #assert (
+    #    nopileup["PdgID"].values - pileup["PdgID"].values
+    #).sum() == 0, "Truths Misalligned. Check CSV creation"
+    
+    #assert np.array_equal(nopileup["PdgID"].values, pileup["PdgID"].values )
+        
     '''assert (
         nopileup["Px"].values - pileup["Px"].values
     ).sum() == 0, "Truths Misalligned. Check CSV creation"
@@ -154,6 +284,7 @@ def prepxRIMdata(path, logfile=None, isTraining=True, sample="JZ7W"):
 
     pileup.reset_index(drop=True, inplace=True)
     nopileup.reset_index(drop=True, inplace=True)
+    
     # Make a new df with the truth data as the base and add the relevant pu and no pu (MC and Track) data to it.
     # The truth data is the same for both pu and no pu data so we can just that from the pu data.
     newData = pd.concat(
@@ -191,6 +322,7 @@ def prepxRIMdata(path, logfile=None, isTraining=True, sample="JZ7W"):
         ],
         axis=1,
     )
+    
     # Mask tracks from muons
     #mask = (newData['PdgID'] == 13) | (newData['PdgID'] == -13)
     #newData = newData[~mask]
@@ -202,30 +334,75 @@ def prepxRIMdata(path, logfile=None, isTraining=True, sample="JZ7W"):
     #True(1) if cases where Track Overlay has a match, but MC Overlay does not OR cases where Track Overlay itself has no match, regardless of MC Overlay
     #newData["TargetLabel"] = newData["wo_hasMatch"] & ~newData["w_hasMatch"] | ~newData["wo_hasMatch"]
     #True(1) if cases where Track Overlay has a match, but MC Overlay does not OR Track Overlay has no match
+    
+    #newData["TargetLabel"] creates a new boolean column
+    #w_hasMatch isMC Overlay matching result, and wo_hasMatch is TrackOverlay matching result
+    #~ means NOT, & means AND,  means OR
+    #newData["wo_hasMatch"] & ~newData["w_hasMatch"] means Track Overlay has a match AND MC Overlay does not
+    #~newData["wo_hasMatch"] & newData["w_hasMatch"] means Track Overlay does not have a match AND MC Overlay does.
+    #So TargetLabel is True whenever the two overlay methods disagree.
+    
+    
     newData["TargetLabel"] = (newData["wo_hasMatch"] & ~newData["w_hasMatch"]) | (~newData["wo_hasMatch"] & newData["w_hasMatch"])
 
+    #Right after TargetLabel, the code starts creating a few derived truth/event-level quantities:
+
+    #TruphMultiplicity counts number of truth-particle rows in an event
     newData["TruthMultiplicity"] = newData.groupby("EvtNumber")["EvtNumber"].transform(
         "count"
     )
+    
+    #TruthPi, note that arctan2 would be better, cause it accounts for the quadrants. This is not the same as Phi. WEIRD
+    #but apparently this isn't used, let's see
     newData["TruthPhi"] = np.arctan(newData["Py"] / newData["Px"])
+    
+    #sum over px
     newData["eventPx"] = newData.groupby("EvtNumber")["Px"].transform("sum")
+    
+    #sum over py
     newData["eventPy"] = newData.groupby("EvtNumber")["Py"].transform("sum")
+    
+    #eventpt, but calculated from the summed px and summed py. this is the magnitude of the vector sum of the transverse momenta. It is not the sum of the pts.
     newData["eventPt"] = (newData["eventPx"] ** 2 + newData["eventPy"] ** 2) ** 0.5
+    
+    #number of events, needed for densitity calculations later, it is not a feature
     numEvents = len(newData["EvtNumber"].unique())
+    
+    #DataFrame index is reorganized
+    #changes the DataFrame from having a simple row index into a two-level index that identifies both the event and the position of a truth particle within that event
+    #The end result is a Pandas MultiIndex. (EvtNumber, particle_number)
+    #Because of the MultiIndex, Pandas/xarray can reinterpret the data as a two-dimensional structure
+    
     newData = newData.set_index("EvtNumber") #EvtNumber column is used as the index corresponding to a separate group of rows
     # Split the original DataFrame into groups based on the EvtNumber index
     newData = newData.set_index(newData.groupby("EvtNumber").cumcount(), append=True)
+    
+    #After reorganizing the DataFrame into an event × particle structure, the code extracts just the variables it needs for the local-density calculations
+    #This creates a smaller DataFrame containing only eta and pho
     newData_eponly = newData[["Eta", "Phi"]]
+    
+    #and another dataframe only for the pt
     newData_pt = newData[["Pt"]]
+    
     # newData_eponly.to_xarray() converts the dataset based on the dim of the indices of the newData_eponly 
+    #the dataframe shape becomes something like: (2, number_of_events, max_number_of_particles)
+    #after that, ep_only is now essentially a NumPy array
     ep_only = newData_eponly.to_xarray().to_array().values # ep_only = (2, nEvents, nTracks). 2: Eta, Phi
+    #the transpose changes the ordering to (event, particle, feature)
     ep_only = np.transpose(ep_only, axes=[1, 2, 0]) # the resulting shape is (nEvents, nTracks, 2)
+    #mask invalid entries (like nans or infs)
     ep_only = np.ma.masked_invalid(ep_only)
+    
     pt_only = newData_pt.to_xarray().to_array().values
     pt_only= np.transpose(pt_only, axes=[1, 2, 0])
     pt_only = np.squeeze(pt_only, axis=-1)
     pt_only = np.ma.masked_invalid(pt_only)
+    
+    #The code has transformed the original DataFrame into two convenient arrays, ep_only, and pt_only
+     
     t3 = time.time()
+    
+    #density-related quantities:
     
     # Create a few density based variables as well.
     # A higher density at a smaller radius indicates that there are more tracks in close proximity to each other.
@@ -239,6 +416,7 @@ def prepxRIMdata(path, logfile=None, isTraining=True, sample="JZ7W"):
     sum_density_05 = []
     scalar_pT_02 = []
     scalar_pT_05 = []
+    
     while start < numEvents:
         print(f"Evaluating event {start}-{start+nchunk}")
         collect, sum_collect, pt_around_track= get_densities(ep_only[start : start + nchunk], pt_only[start: start+nchunk], [0.2, 0.05], path, logfile) 
@@ -257,23 +435,30 @@ def prepxRIMdata(path, logfile=None, isTraining=True, sample="JZ7W"):
         file=logfile,
         flush=True,
     )
+    
+    #densities were calculated in chunks of 1000 events. Now flatten these chunks into one long list
     density_02 = functools.reduce(operator.iconcat, density_02, []) #len(density_02) = number of tracks
     density_05 = functools.reduce(operator.iconcat, density_05, [])
     sum_density_02 = functools.reduce(operator.iconcat, sum_density_02, [])
     sum_density_05 = functools.reduce(operator.iconcat, sum_density_05, [])
     scalar_pT_02 = functools.reduce(operator.iconcat,scalar_pT_02, [])
     scalar_pT_05 = functools.reduce(operator.iconcat, scalar_pT_05, [])
+    
+    #these arrays are added as new DataFrame columns
     newData["R02"] = density_02 # the list of all tracks pairs values for each event be assigned as a R02 column
     newData["R05"] = density_05
     newData["sumR02"] = sum_density_02 # the list of all tracks pairs values for each event be assigned as a R02 column
     newData["sumR05"] = sum_density_05
     newData["sumpT02"] = scalar_pT_02
     newData["sumpT05"] = scalar_pT_05
+    
     #scalar_pT_02 = functools.reduce(operator.iconcat, scalar_pT_02, [])
     #scalar_pT_05 = functools.reduce(operator.iconcat, scalar_pT_05, [])
     #newData["sPT02"] = scalar_pT_02
     #newData["sPT05"] = scalar_pT_05
     # Save the data to a h5 file for later use.
+    
+    #save the complete processed DataFrame
     newData.to_hdf(f"{path}/{sample}.h5", key="newData", format="t")
     print(
         f"h5 saved, moving on. {str(datetime.timedelta(seconds=round(t4-t0)))}",
@@ -285,6 +470,9 @@ def prepxRIMdata(path, logfile=None, isTraining=True, sample="JZ7W"):
 
 
 def prepareData(path, logfile=None, sample="JZ7W", use_densities=True):
+    
+    print("prepareData")
+    
     """
     Load and prepare data with all features. This is the main data preparation function
     that should be called once to create processed data files.
@@ -309,6 +497,8 @@ def prepareData(path, logfile=None, sample="JZ7W", use_densities=True):
     feat_list : list
         List of feature names.
     """
+    
+    #glob is a Python module for finding files matching a filename pattern.    
     existinghpath_matched = glob.glob(f"{path}/matched_{sample}_data*.h5")
     existinghpath_unmatched = glob.glob(f"{path}/unmatched_{sample}_data*.h5")
     
@@ -317,9 +507,16 @@ def prepareData(path, logfile=None, sample="JZ7W", use_densities=True):
         fullData_matched = pd.read_hdf(existinghpath_matched[0])
         fullData_unmatched = pd.read_hdf(existinghpath_unmatched[0])
         print(f"Loaded matched: {fullData_matched.shape}, unmatched: {fullData_unmatched.shape}", file=logfile, flush=True)
+
     else:
-        print("No existing processed files found. Creating from raw CSV files...", file=logfile, flush=True)
+        #print(f"No existing processed files found. Creating from raw CSV files...", file=logfile, flush=True)
+        
+        #here the csv files get processed  ----------------------------------------
         fullData = prepxRIMdata(path, logfile, sample=sample, isTraining=True)
+        # -------------------------------------------------------------------------
+        
+        #split the single fullData DataFrame into two DataFrames according to the target label
+        #note that the naming is bad, this is not matched and unmatched, it uis target=1 or target=0. FIX????
         fullData_unmatched = fullData[fullData["TargetLabel"] == 0]
         fullData_matched = fullData[fullData["TargetLabel"] == 1]
         
@@ -328,16 +525,28 @@ def prepareData(path, logfile=None, sample="JZ7W", use_densities=True):
         fullData_matched.to_hdf(f"{path}/matched_{sample}_data.h5", key="data")
         print(f"Saved processed data: matched_{sample}_data.h5, unmatched_{sample}_data.h5", file=logfile, flush=True)
     
+    print("check4")
+    
     # Create a sample dataset to get the feature list
+    #Given the current configuration, which features would be used as ML inputs?
+    
+    #Build a small representative sample, 100 rows for each target=1 and target=0 -> 200 in total
     sample_data = pd.concat([fullData_matched.head(100), fullData_unmatched.head(100)])
+    
+    #Construct an xRIMdataset
     xRIM_sample = xRIMdataset(sample_data, use_densities=use_densities, logfile=logfile)
+    
+    #get names of the features 
     feat_list = xRIM_sample.featureList
+    
+    #this last step is awkward, the feature list should have been clear already. FIX????? 
     
     return fullData_matched, fullData_unmatched, feat_list
 
 
-def loadTrainTestData(path, logfile=None, sample="JZ7W", split=0.8, use_densities=True, 
-                      pos_sample_size=None, neg_sample_size=None):
+#def loadTrainTestData(path, logfile=None, sample="JZ7W", split=0.8, use_densities=True, pos_sample_size=None, neg_sample_size=None):
+def loadTrainValTestData(path, logfile=None, sample="JZ7W", split=0.8, use_densities=True, event_sample_size=None):
+
     """
     Load processed data and split into training and test sets with class balancing.
     
@@ -383,53 +592,114 @@ def loadTrainTestData(path, logfile=None, sample="JZ7W", split=0.8, use_densitie
             f"Processed data not found at {path}. Please run prepareData() first."
         )
     
-    fullData_matched = pd.read_hdf(existinghpath_matched[0])
-    fullData_unmatched = pd.read_hdf(existinghpath_unmatched[0])
+    #load the two Pandas DataFrames:
+    fullData_matched = pd.read_hdf(existinghpath_matched[0])   # TargetLabel = 1 -> Overlay methods DISAGREE
+    fullData_unmatched = pd.read_hdf(existinghpath_unmatched[0]) # TargetLabel = 0 -> Overlay methods AGREE
     
     # Sample if sizes specified
-    if pos_sample_size is not None:
-        fullData_matched = fullData_matched.sample(n=min(pos_sample_size, len(fullData_matched)), random_state=42)
-    if neg_sample_size is not None:
-        fullData_unmatched = fullData_unmatched.sample(n=min(neg_sample_size, len(fullData_unmatched)), random_state=42)
-    
-    print(f"Using matched: {fullData_matched.shape}, unmatched: {fullData_unmatched.shape}", file=logfile, flush=True)
+    #If no sizes were specified, nothing happens and all data are retained.
+    #if sizes were specified, randomly select rows
+     
+    #if pos_sample_size is not None:
+    #    fullData_matched = fullData_matched.sample(n=min(pos_sample_size, len(fullData_matched)), random_state=42)
+    #if neg_sample_size is not None:
+    #    fullData_unmatched = fullData_unmatched.sample(n=min(neg_sample_size, len(fullData_unmatched)), random_state=42)
+    #print(f"Using matched: {fullData_matched.shape}, unmatched: {fullData_unmatched.shape}", file=logfile, flush=True)
     
     # Combine and create dataset
+    #Combine the two classes again
+    #They need to be together because the ML dataset should contain both classes.
     Data_concat = pd.concat([fullData_matched, fullData_unmatched], axis=0)
-    xRIM_train = xRIMdataset(Data_concat, use_densities=use_densities, logfile=logfile)
+ 
+    if event_sample_size is not None:
+        all_events = (Data_concat.index.get_level_values("EvtNumber").unique().to_numpy())
+        rng = np.random.default_rng(42)
+        selected_events = rng.choice(all_events,size=min(event_sample_size, len(all_events)),replace=False)
+        evt = Data_concat.index.get_level_values("EvtNumber")
+        Data_concat = Data_concat[evt.isin(selected_events)]
+ 
+    #NEW: Split into 3 samples
+    Data_train, Data_val, Data_test, split_events = split_by_event(Data_concat,train_fraction=split,random_state=1)
     
-    feat = xRIM_train.features
-    labels = xRIM_train.labels
-    feat_list = xRIM_train.featureList
+    train_data = xRIMdataset(Data_train,use_densities=use_densities,logfile=logfile)
+    val_data = xRIMdataset(Data_val,use_densities=use_densities,logfile=logfile)
+    test_data = xRIMdataset(Data_test,use_densities=use_densities,logfile=logfile)
     
-    # Compute class weights for imbalanced data
-    false_classW = np.full(fullData_unmatched.shape[0], 0)
-    true_classW = np.full(fullData_matched.shape[0], 1)
-    mixed_Y = np.concatenate([true_classW, false_classW])
-    unique_classes = np.unique(mixed_Y)
-    unique_y = [0., 1.]
-    
-    classWeight = dict(zip(
-        unique_y, 
-        sklearn.utils.class_weight.compute_class_weight('balanced', classes=unique_classes, y=mixed_Y)
-    ))
-    
-    a = list(classWeight.values())
-    print(f"Class weights: NoDiff={a[0]:.4f}, Diff={a[1]:.4f}", file=logfile, flush=True)
-    
-    # Assign weights to each sample
-    W1 = np.where(labels == 0, a[0], labels)
-    W = np.where(labels == 1, a[1], W1)
-    
-    # Train/test split
-    F_train, F_test, L_train, L_test, W_train, W_test = train_test_split(
-        feat, labels, W, test_size=1-split, shuffle=True, random_state=1
-    )
-    
-    print(f"Split complete - Train: {F_train.shape}, Test: {F_test.shape}", file=logfile, flush=True)
-    
-    return F_train, F_test, L_train, L_test, W_train, W_test, feat_list
+    F_train = train_data.features
+    F_val   = val_data.features
+    F_test  = test_data.features
 
+    L_train = train_data.labels
+    L_val   = val_data.labels
+    L_test  = test_data.labels
+
+    feat_list = train_data.featureList
+    
+    #Create the actual ML dataset
+    #xRIM_train = xRIMdataset(Data_concat, use_densities=use_densities, logfile=logfile)
+    #feat = xRIM_train.features
+    #labels = xRIM_train.labels
+    #feat_list = xRIM_train.featureList
+    #And xRIMdataset.getFeatures() performs the MinMax scaling that we saw earlier.
+    
+    #deal with class imbalance
+    # Compute class weights for imbalanced data
+    #false_classW = np.full(fullData_unmatched.shape[0], 0)
+    #true_classW = np.full(fullData_matched.shape[0], 1)
+    #mixed_Y = np.concatenate([true_classW, false_classW])
+    #unique_classes = np.unique(mixed_Y)
+    #unique_y = [0., 1.]
+    
+    unique_classes = np.unique(L_train)
+    class_weights = sklearn.utils.class_weight.compute_class_weight(class_weight="balanced", classes=unique_classes, y=L_train)
+    classWeight = dict(zip(unique_classes, class_weights))
+    
+    #This uses scikit-learn's standard "balanced" weighting.
+    #classWeight = dict(zip(unique_y,sklearn.utils.class_weight.compute_class_weight('balanced', classes=unique_classes, y=mixed_Y)))
+    
+    #Give every individual sample its weight
+    #a[0] → weight for TargetLabel 0
+    #a[1] → weight for TargetLabel 1
+    #a = list(classWeight.values())
+    #print(f"Class weights: NoDiff={a[0]:.4f}, Diff={a[1]:.4f}", file=logfile, flush=True)
+    # Assign weights to each sample
+    #W1 = np.where(labels == 0, a[0], labels)
+    #W = np.where(labels == 1, a[1], W1)
+    
+    W_train = np.where(L_train == 0,classWeight[0],classWeight[1])
+    W_val = np.where(L_val == 0,classWeight[0],classWeight[1])
+    W_test = np.where(L_test == 0,classWeight[0],classWeight[1])
+    
+    
+    # Train/test split ------------------------------------------------------
+    
+    #F_train, F_test, L_train, L_test, W_train, W_test = train_test_split(
+    #feat,labels,W,test_size=1-split,shuffle=True,random_state=1)
+
+    #F_train, F_test, L_train, L_test, W_train, W_test = train_test_split(
+    #    feat, labels, W, test_size=1-split, shuffle=True, random_state=1
+    #)
+    #print(f"Split complete - Train: {F_train.shape}, Test: {F_test.shape}", file=logfile, flush=True)
+    
+    scaler = MinMaxScaler()
+    # Learn min/max ONLY from training data
+    F_train = scaler.fit_transform(F_train)
+
+    # Apply exactly the same transformation to both
+    F_val = scaler.transform(F_val)
+    F_test = scaler.transform(F_test)
+    
+    #return F_train, F_test, L_train, L_test, W_train, W_test, feat_list, scaler
+
+    print(
+        f"Split complete - "
+        f"Train: {F_train.shape}, "
+        f"Validation: {F_val.shape}, "
+        f"Test: {F_test.shape}",
+        file=logfile,
+        flush=True )
+    
+    return (F_train,F_val,F_test,L_train,L_val,L_test,W_train,W_val,W_test,feat_list,scaler,split_events)
 
 def loadValidationData(path, logfile=None, sample="JZ7W", use_densities=True):
     """
@@ -474,8 +744,7 @@ def loadValidationData(path, logfile=None, sample="JZ7W", use_densities=True):
     return bundle, vali_features, mixed
 
 
-def loadEvaluationData(path, logfile=None, sample="JZ7W", use_densities=True, 
-                       pos_sample_size=None, neg_sample_size=None):
+def loadEvaluationData(path, logfile=None, sample="JZ7W", use_densities=True, event_ids=None, event_sample_size=None):
     """
     Load data for evaluation/inference. Returns features and labels without train/test split.
     Use this when you want to evaluate on a complete dataset (can be new data).
@@ -518,22 +787,39 @@ def loadEvaluationData(path, logfile=None, sample="JZ7W", use_densities=True,
     fullData_unmatched = pd.read_hdf(existinghpath_unmatched[0])
     
     # Sample if sizes specified
-    if pos_sample_size is not None:
-        fullData_matched = fullData_matched.sample(n=min(pos_sample_size, len(fullData_matched)), random_state=42)
-    if neg_sample_size is not None:
-        fullData_unmatched = fullData_unmatched.sample(n=min(neg_sample_size, len(fullData_unmatched)), random_state=42)
-    
-    print(f"Evaluation data: pos={fullData_matched.shape[0]}, neg={fullData_unmatched.shape[0]}", file=logfile, flush=True)
+    #optional subsampling, if sizes have been passed, say matched_size = 50,000, unmatched_size = 100,000
+    #if pos_sample_size is not None:
+    #    fullData_matched = fullData_matched.sample(n=min(pos_sample_size, len(fullData_matched)), random_state=42)
+    #if neg_sample_size is not None:
+    #    fullData_unmatched = fullData_unmatched.sample(n=min(neg_sample_size, len(fullData_unmatched)), random_state=42)
+    #print(f"Evaluation data: pos={fullData_matched.shape[0]}, neg={fullData_unmatched.shape[0]}", file=logfile, flush=True)
     
     # Combine and create dataset
+    #two classes are combined into one DataFrame again containing both labels
     Data_concat = pd.concat([fullData_matched, fullData_unmatched], axis=0)
+    
+    # Restrict to specified events, e.g. stored test events
+    if event_ids is not None:
+        evt = Data_concat.index.get_level_values("EvtNumber")
+        Data_concat = Data_concat[evt.isin(event_ids)]
+    
+    if event_sample_size is not None:
+        all_events = (Data_concat.index.get_level_values("EvtNumber").unique().to_numpy())
+        rng = np.random.default_rng(42)
+        selected_events = rng.choice(all_events,size=min(event_sample_size, len(all_events)),replace=False)
+        evt = Data_concat.index.get_level_values("EvtNumber")
+        Data_concat = Data_concat[evt.isin(selected_events)]
+    
+    #fit new MinMaxScaler to evaluation data, evaluation features not necessarily transformed using same min/max values as training data. FIX???
     xRIM_eval = xRIMdataset(Data_concat, use_densities=use_densities, logfile=logfile)
     
-    F_eval = xRIM_eval.features
-    L_eval = xRIM_eval.labels
-    feat_list = xRIM_eval.featureList
+    F_eval = xRIM_eval.features #-> numerical feature matrix
+    L_eval = xRIM_eval.labels #-> TargetLabel array
+    feat_list = xRIM_eval.featureList #->names of the network inputs
     
     print(f"Evaluation features shape: {F_eval.shape}", file=logfile, flush=True)
+    
+    #data_concat then becomes df_eval in evaluate_model.py
     
     return F_eval, L_eval, feat_list, Data_concat
 

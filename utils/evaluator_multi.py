@@ -17,7 +17,11 @@ hybrid and MC overlay, demonstrating ML-based selection advantage over random se
 """
 
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import roc_auc_score
+from data.features import get_feature_names
+
 from .plotting import (
+    plot_eta,
     plot_ROC,
     plot_accuracy,
     plot_efficiencies,
@@ -77,26 +81,40 @@ def get_event_xscore(model, FSscaler, eventSet, use_densities, logfile, **kwargs
     rouletteScore : np.ndarray
         Computed roulette score for each event.
     """
+    
     # Extract parameters from kwargs with defaults
     batchsize = kwargs.get("batchsize", 50000)
     xscore = kwargs.get("xscore", "simpleratio")
     frac = kwargs.get("frac", 0.25)
     evtmix = kwargs.get("evtmix", "sum")
     thres = kwargs.get("thres", 0.8)
+    track_threshold = kwargs["track_threshold"]
     
     # Define feature list
-    featList = [
-        "Px", "Py", "Pz", "E", "Pt", 
-        "R02", "R05", "sumR02", "sumR05", "sumpT02", "sumpT05",
-        "w_numPU", "TruthMultiplicity", "eventPt"
-    ]
-    numFeatures = len(featList) if use_densities else len(featList) - 6
+    #featList = [
+    #    "Px", "Py", "Pz", "E", "Pt", 
+    #    "R02", "R05", "sumR02", "sumR05", "sumpT02", "sumpT05",
+    #    "w_numPU", "TruthMultiplicity", "eventPt"
+    #]
+    #numFeatures = len(featList) if use_densities else len(featList) - 6
+    
+    # Define features exactly as during training
+    #featList = ["Px", "Py", "Pz", "E", "Pt"]
+    #if use_densities:
+    #featList += ["R02", "R05", "sumR02", "sumR05", "sumpT02", "sumpT05", "w_numPU", "TruthMultiplicity", "eventPt"]
+    
+    featList = get_feature_names(use_densities)
+    numFeatures = len(featList)
     
     print(f"Computing event xScore with {numFeatures} features", file=logfile, flush=True)
     
-    # Extract labels and features
-    labels = eventSet[["TargetLabel"]].to_xarray().to_array().values
+    # Extract target labels and features
+    #labels = eventSet[["TargetLabel"]].to_xarray().to_array().values
+    
+    # Keep exactly the features used by the model
     eventSet = eventSet[featList]
+    
+    #df_eval still has the MultiIndex -That is what allows to_xarray() to reconstruct the event structure
     
     # Convert to array and handle invalid values
     eventSet = eventSet.to_xarray().to_array().values
@@ -107,31 +125,29 @@ def get_event_xscore(model, FSscaler, eventSet, use_densities, logfile, **kwargs
     eventSet_flat = eventSet.reshape(l * b, h)
     
     # Prepare labels
-    labels = np.transpose(labels, axes=[1, 2, 0])
-    labels = np.array(labels, dtype=float).reshape(labels.shape[0] * labels.shape[1], -1)
-    labels = np.ma.masked_invalid(labels)
+    #labels = np.transpose(labels, axes=[1, 2, 0])
+    #labels = np.array(labels, dtype=float).reshape(labels.shape[0] * labels.shape[1], -1)
+    #labels = np.ma.masked_invalid(labels)
     
     # Scale features and predict
-    feat = FSscaler.fit_transform(eventSet_flat[:, :numFeatures])
+    #feat = FSscaler.fit_transform(eventSet_flat)
+    feat = FSscaler.transform(eventSet_flat)
     scores = model.predict(feat, batch_size=batchsize)
     scores = np.ma.masked_invalid(scores)
     
     # Compute threshold based on background rejection
     # Uses quantile of scores for TargetLabel=1 (tracks that differ between overlays)
-    threshold = np.quantile(scores[labels == 1.0], thres)
-    
-    print(f"Score threshold (quantile={thres}): {threshold:.4f}", file=logfile, flush=True)
-    print(f"  Threshold for TargetLabel=1: {np.quantile(scores[labels==1.0], thres):.4f}", file=logfile, flush=True)
-    print(f"  Threshold for TargetLabel=0: {np.quantile(scores[labels==0.0], thres):.4f}", file=logfile, flush=True)
+    #threshold = np.quantile(scores[labels == 1.0], thres)
+    #print(f"Score threshold (quantile={thres}): {threshold:.4f}", file=logfile, flush=True)
+    #print(f"  Threshold for TargetLabel=1: {np.quantile(scores[labels==1.0], thres):.4f}", file=logfile, flush=True)
+    #print(f"  Threshold for TargetLabel=0: {np.quantile(scores[labels==0.0], thres):.4f}", file=logfile, flush=True)
     
     # Reshape scores back to event structure
     scores = scores.reshape(l, b, 1)
     
     # Compute roulette score using specified xScore method
     rouletteScore = getxScore(
-        xscore, scores, threshold, eventSet.reshape(l, b, h),
-        frac=frac, event_mixing=evtmix
-    )
+        xscore, scores, track_threshold, eventSet.reshape(l, b, h), frac=frac, event_mixing=evtmix )
     
     return rouletteScore
 
@@ -518,7 +534,52 @@ def simulate_roulette(scores, num_estimates, **kwargs):
 # Main Evaluation Functions
 # =============================================================================
 
-def evaluate_event(df, model, use_densities, scalers, sv_dir, xscore, evtmix, logfile=None, **kwargs):
+def permutation_importance(model, X, y, feature_names, n_repeats=10):
+
+    print("Feature importance")
+
+    # Nominal performance
+    nominal_scores = model.predict(X, batch_size=8192, verbose=0).squeeze()
+    nominal_auc = roc_auc_score(y, nominal_scores)
+
+    importances = []
+
+    for i, feature in enumerate(feature_names):
+
+        print("now run feature ",feature_names[i])
+
+        drops = []
+
+        for n in range(n_repeats):
+
+            print("n_repeats ",n)
+
+            X_perm = X.copy()
+
+            # Shuffle only this feature
+            np.random.shuffle(X_perm[:, i])
+
+            perm_scores = model.predict(X_perm, batch_size=8192, verbose=0).squeeze()
+            perm_auc = roc_auc_score(y, perm_scores)
+
+            drops.append(nominal_auc - perm_auc)
+
+        importances.append({
+            "feature": feature,
+            "importance": np.mean(drops),
+            "std": np.std(drops)
+        })
+
+    importances.sort(
+        key=lambda x: x["importance"],
+        reverse=True
+    )
+
+    return nominal_auc, importances
+
+#----------------------------------------------------------------------------------------------------
+
+def evaluate_event(df, model, use_densities, scalers, sv_dir, xscore, evtmix, track_threshold, logfile=None,**kwargs):
     """
     Perform event-level evaluation with ML threshold optimization.
     
@@ -567,6 +628,10 @@ def evaluate_event(df, model, use_densities, scalers, sv_dir, xscore, evtmix, lo
     sv_dir = f"results/{sv_dir}/plots/"
     os.makedirs(sv_dir, exist_ok=True)
     
+    print("--------------------> ETA <-------------------------")
+    eta = df["Eta"].to_numpy()
+    plot_eta(eta,sv_dir)
+    
     # Unpack scalers tuple if needed
     if isinstance(scalers, tuple):
         FSscaler, _ = scalers  # Extract feature scaler, ignore conditional scaler
@@ -578,10 +643,9 @@ def evaluate_event(df, model, use_densities, scalers, sv_dir, xscore, evtmix, lo
     print("="*60, file=logfile, flush=True)
     
     # Compute event-level xScores
+    #calculate one score per event
     scores = get_event_xscore(
-        model, FSscaler, df, use_densities, logfile,
-        xscore=xscore, thres=0.58, evtmix=evtmix
-    )
+        model,FSscaler,df,use_densities,logfile,track_threshold=track_threshold,xscore=xscore,evtmix=evtmix )
     
     print(f"Event xScores computed: {scores.shape[0]} events", file=logfile, flush=True)
     
@@ -601,6 +665,7 @@ def evaluate_event(df, model, use_densities, scalers, sv_dir, xscore, evtmix, lo
     }
     
     # Plot roulette score distribution
+    #plots the distribution of event xScores and presumably draws the chosen score threshold(s) on it
     plot_roulette_score(scores, roul_thres, dir=sv_dir, logfile=logfile)
     
     # Evaluate each threshold cut
@@ -609,9 +674,10 @@ def evaluate_event(df, model, use_densities, scalers, sv_dir, xscore, evtmix, lo
         
         # Generate random baseline for comparison
         # Using 100 random estimates for uncertainty bands (reduced from 10000 for memory efficiency)
+        #instead of intelligent ML-based event selection, it constructs a random baseline with the same nominal fraction
         randomScores = get_event_xscore(
-            model, FSscaler, df, use_densities, logfile,
-            xscore="random", thres=0.58, evtmix=evtmix,
+            model, FSscaler, df, use_densities, logfile,track_threshold=track_threshold,
+            xscore="random", evtmix=evtmix,
             frac=cuts[quality], estimator=100
         )
         
@@ -649,8 +715,8 @@ def evaluate_event(df, model, use_densities, scalers, sv_dir, xscore, evtmix, lo
     print("="*60, file=logfile, flush=True)
 
 
-def evaluate_performance(model, sv_dir, validation=None, feat=None, cond=None, 
-                        labels=None, history=None, logfile=None, isTraining=False):
+def evaluate_performance(model, sv_dir, validation=None, feat=None, cond=None, labels=None,
+    history=None, logfile=None, isTraining=False, track_threshold=None, track_quantile=None):
     """
     Evaluate track-level model performance.
     
@@ -695,6 +761,7 @@ def evaluate_performance(model, sv_dir, validation=None, feat=None, cond=None,
     print(f"Test Accuracy: {test_acc:.4f} ({test_acc*100:.2f}%)", file=logfile, flush=True)
     
     # Get model predictions
+    #NOTE THAT THESE ARE NOT LOSSES, They are the neural-network outputs — the sigmoid classifier scores
     losses = model.predict(feat)
     losses = losses.squeeze()
     
@@ -703,7 +770,7 @@ def evaluate_performance(model, sv_dir, validation=None, feat=None, cond=None,
         plot_losses(history, sv_dir, logfile)
         plot_accuracy(history, sv_dir, logfile)
     
-    plot_scores(losses, labels, sv_dir, logfile)
+    plot_scores(losses, labels, sv_dir, logfile,track_threshold=track_threshold,track_quantile=track_quantile)
     plot_ROC(losses, labels, sv_dir, logfile)
     
     print("="*60, file=logfile, flush=True)
