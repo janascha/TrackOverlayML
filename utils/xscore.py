@@ -19,7 +19,7 @@ def getxScore(name, scores, threshold, eventSet, **kwargs):
     else:
         event_mixing = "sum"
 
-    if name.casefold() == "None":
+    if name.casefold() == "none":
         return 0
 
     elif name.casefold() == "simpleratio":
@@ -64,17 +64,17 @@ def getxScore(name, scores, threshold, eventSet, **kwargs):
         event_sum_Pt = np.ma.masked_invalid(event_sum_Pt).sum(axis=1)
         return event_sum_Pt.data
 
-    elif name.casefold() == "jetpt":
-        event_lj_Pt = np.array(eventSet[:, 0, 7], dtype=float)
-        event_lj_Pt = np.ma.masked_invalid(event_lj_Pt)
-        return event_lj_Pt.data
+    #elif name.casefold() == "jetpt":
+        #event_lj_Pt = np.array(eventSet[:, 0, 7], dtype=float)
+        #event_lj_Pt = np.ma.masked_invalid(event_lj_Pt)
+        #return event_lj_Pt.data
 
     elif name.casefold() == "density_2":
         density_2 = np.array(eventSet[:, :, 5], dtype=float)
         if event_mixing.casefold() == "max":
             max_density_2 = np.ma.masked_invalid(density_2).max(axis=1)
             return max_density_2
-        elif event_mixing.casefold() == "mix":
+        elif event_mixing.casefold() == "min":
             min_density_2 = np.ma.masked_invalid(density_2).min(axis=1)
             return min_density_2
         elif event_mixing.casefold() == "prod":
@@ -87,7 +87,7 @@ def getxScore(name, scores, threshold, eventSet, **kwargs):
             avg_density_2 = np.ma.masked_invalid(density_2).mean(axis=1)
             return avg_density_2
         elif event_mixing.casefold() == "ptweight":
-            wt_density_2 = np.ma.masked_invalid(density_2)*np.ma.masked_invalid(eventSet[:,:,7])
+            wt_density_2 = np.ma.masked_invalid(density_2)*np.ma.masked_invalid(eventSet[:,:,4])
             wt_density_2 = wt_density_2.sum(axis=1)
             return wt_density_2
 

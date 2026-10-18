@@ -56,7 +56,7 @@ Examples:
     parser.add_argument("--path", type=str, default="data", help="Data directory path")
     parser.add_argument("--sample", type=str, default="JZ7W", help="Sample name")
     parser.add_argument("--seed", type=int, default=23, help="Random seed")
-    parser.add_argument("--trainsplit", type=float, default=0.8, help="Train/test split")
+    parser.add_argument("--trainsplit", type=float, default=0.7, help="Train/test split")
     parser.add_argument("--layers", nargs="*", type=int, default=[45, 35, 30], help="Layer sizes")
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
     parser.add_argument("--epochs", type=int, default=100, help="Number of training epochs")
@@ -68,8 +68,6 @@ Examples:
     parser.add_argument("--evtmix", type=str, default="None", help="Event mix type")
     parser.add_argument("--usedensity", type=int, default=1, help="Use density features")
     parser.add_argument("--eval_sample", type=str, default=None, help="Sample for evaluation (if different)")
-    parser.add_argument("--matched_size", type=int, default=None, help="Number of matched samples")
-    parser.add_argument("--unmatched_size", type=int, default=None, help="Number of unmatched samples")
     
     args = parser.parse_args()
     

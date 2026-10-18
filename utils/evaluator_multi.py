@@ -90,57 +90,30 @@ def get_event_xscore(model, FSscaler, eventSet, use_densities, logfile, **kwargs
     thres = kwargs.get("thres", 0.8)
     track_threshold = kwargs["track_threshold"]
     
-    # Define feature list
-    #featList = [
-    #    "Px", "Py", "Pz", "E", "Pt", 
-    #    "R02", "R05", "sumR02", "sumR05", "sumpT02", "sumpT05",
-    #    "w_numPU", "TruthMultiplicity", "eventPt"
-    #]
-    #numFeatures = len(featList) if use_densities else len(featList) - 6
-    
-    # Define features exactly as during training
-    #featList = ["Px", "Py", "Pz", "E", "Pt"]
-    #if use_densities:
-    #featList += ["R02", "R05", "sumR02", "sumR05", "sumpT02", "sumpT05", "w_numPU", "TruthMultiplicity", "eventPt"]
     
     featList = get_feature_names(use_densities)
     numFeatures = len(featList)
     
     print(f"Computing event xScore with {numFeatures} features", file=logfile, flush=True)
     
-    # Extract target labels and features
-    #labels = eventSet[["TargetLabel"]].to_xarray().to_array().values
-    
     # Keep exactly the features used by the model
     eventSet = eventSet[featList]
     
-    #df_eval still has the MultiIndex -That is what allows to_xarray() to reconstruct the event structure
-    
-    # Convert to array and handle invalid values
-    eventSet = eventSet.to_xarray().to_array().values
+    # Convert to xarray and record the exact event order used
+    eventSet_xr = eventSet.to_xarray()
+    event_ids = eventSet_xr.coords["EvtNumber"].values
+    eventSet = eventSet_xr.to_array().values
     eventSet = np.ma.masked_invalid(eventSet)
     eventSet = np.transpose(eventSet, axes=[1, 2, 0])  # Shape: (nEvents, nTracks, nFeatures)
     
     l, b, h = eventSet.shape  # l=events, b=tracks per event, h=features
     eventSet_flat = eventSet.reshape(l * b, h)
     
-    # Prepare labels
-    #labels = np.transpose(labels, axes=[1, 2, 0])
-    #labels = np.array(labels, dtype=float).reshape(labels.shape[0] * labels.shape[1], -1)
-    #labels = np.ma.masked_invalid(labels)
-    
     # Scale features and predict
     #feat = FSscaler.fit_transform(eventSet_flat)
     feat = FSscaler.transform(eventSet_flat)
     scores = model.predict(feat, batch_size=batchsize)
     scores = np.ma.masked_invalid(scores)
-    
-    # Compute threshold based on background rejection
-    # Uses quantile of scores for TargetLabel=1 (tracks that differ between overlays)
-    #threshold = np.quantile(scores[labels == 1.0], thres)
-    #print(f"Score threshold (quantile={thres}): {threshold:.4f}", file=logfile, flush=True)
-    #print(f"  Threshold for TargetLabel=1: {np.quantile(scores[labels==1.0], thres):.4f}", file=logfile, flush=True)
-    #print(f"  Threshold for TargetLabel=0: {np.quantile(scores[labels==0.0], thres):.4f}", file=logfile, flush=True)
     
     # Reshape scores back to event structure
     scores = scores.reshape(l, b, 1)
@@ -149,7 +122,7 @@ def get_event_xscore(model, FSscaler, eventSet, use_densities, logfile, **kwargs
     rouletteScore = getxScore(
         xscore, scores, track_threshold, eventSet.reshape(l, b, h), frac=frac, event_mixing=evtmix )
     
-    return rouletteScore
+    return rouletteScore, event_ids
 
 
 # =============================================================================
@@ -204,7 +177,7 @@ def get_bins(dataframe, key, num_bins):
         return bins, labels
 
 
-def random_FA_spread(df, scores, observable, roulThres):
+def random_FA_spread(df, scores, score_event_ids, observable, roulThres):
     """
     Compute random baseline for fraction analysis with uncertainty bands.
     
@@ -240,13 +213,17 @@ def random_FA_spread(df, scores, observable, roulThres):
     ptdata = df[["binned", "wo_MatchProb", "w_MatchProb"]].copy()
 
     # Broadcast all scores at once to avoid DataFrame fragmentation
-    group_sizes = df.groupby("EvtNumber").size().to_numpy()
+    #group_sizes = df.groupby("EvtNumber").size().to_numpy()
     
     # Pre-compute all new columns in dictionaries (avoids repeated frame.insert calls)
     newcols = {}
     
+    row_event_ids = df.index.get_level_values("EvtNumber")
+    
     for i in range(estimate):
-        scoresBroad = np.repeat(scores[i], group_sizes)
+        #scoresBroad = np.repeat(scores[i], group_sizes)
+        score_by_event = pd.Series(scores[i],index=score_event_ids)
+        scoresBroad = (score_by_event.reindex(row_event_ids).to_numpy())
         newcols[f"scores_{i}"] = scoresBroad
         
         # Compute hybrid MatchProb directly
@@ -340,6 +317,7 @@ def get_decision(scores, logfile=None, **kwargs):
     decision : np.ndarray (bool)
         Boolean array: True → track overlay (fast), False → MC overlay (full).
     """
+    
     # Extract parameters
     fu_weight = kwargs.get("fu_weight", 0.8)
     f_weight = kwargs.get("f_weight", 1.0)
@@ -397,7 +375,7 @@ def get_decision(scores, logfile=None, **kwargs):
     return decision
 
 
-def binned_efficiency(df, scores, observable, ret_diff=False, logfile=None, **kwargs):
+def binned_efficiency(df, scores, score_event_ids, observable, ret_diff=False, logfile=None, **kwargs):
     """
     Compute efficiency in bins of an observable.
     
@@ -445,8 +423,16 @@ def binned_efficiency(df, scores, observable, ret_diff=False, logfile=None, **kw
     decision = get_decision(scores, logfile, **kwargs)
     
     # Expand decision from event-level to track-level
-    dec_expand = np.repeat(decision, df.groupby("EvtNumber").size().to_numpy())
-    data["decision"] = dec_expand
+    #dec_expand = np.repeat(decision, df.groupby("EvtNumber").size().to_numpy())
+    #data["decision"] = dec_expand
+
+    #Associate each event-level decision explicitly with its EvtNumber
+    decision_by_event = pd.Series(np.asarray(decision),index=score_event_ids)
+
+    # Assign that event decision to every track belonging to the event
+    row_event_ids = df.index.get_level_values("EvtNumber")
+
+    data["decision"] = (decision_by_event.reindex(row_event_ids).to_numpy())
 
     # Compute hybrid MatchProb: use track overlay if decision=True, MC overlay otherwise
     data["h_MatchProb"] = np.where(
@@ -644,8 +630,8 @@ def evaluate_event(df, model, use_densities, scalers, sv_dir, xscore, evtmix, tr
     
     # Compute event-level xScores
     #calculate one score per event
-    scores = get_event_xscore(
-        model,FSscaler,df,use_densities,logfile,track_threshold=track_threshold,xscore=xscore,evtmix=evtmix )
+    scores, score_event_ids = get_event_xscore(model,FSscaler,df,use_densities,logfile,track_threshold=track_threshold,
+        xscore=xscore,evtmix=evtmix)
     
     print(f"Event xScores computed: {scores.shape[0]} events", file=logfile, flush=True)
     
@@ -675,7 +661,7 @@ def evaluate_event(df, model, use_densities, scalers, sv_dir, xscore, evtmix, tr
         # Generate random baseline for comparison
         # Using 100 random estimates for uncertainty bands (reduced from 10000 for memory efficiency)
         #instead of intelligent ML-based event selection, it constructs a random baseline with the same nominal fraction
-        randomScores = get_event_xscore(
+        randomScores, random_event_ids = get_event_xscore(
             model, FSscaler, df, use_densities, logfile,track_threshold=track_threshold,
             xscore="random", evtmix=evtmix,
             frac=cuts[quality], estimator=100
@@ -688,13 +674,13 @@ def evaluate_event(df, model, use_densities, scalers, sv_dir, xscore, evtmix, tr
             print(f"  Analyzing observable: {key}", file=logfile, flush=True)
             
             # Compute binned efficiency for ML routing
-            isf, bins = binned_efficiency(df, scores, key, ret_diff=False, logfile=logfile, **kwargs)
+            isf, bins = binned_efficiency(df, scores, score_event_ids, key, ret_diff=False, logfile=logfile, **kwargs)
             
             # Compute random baseline with uncertainty
-            down, up, mean = random_FA_spread(df, randomScores, key, 3)
+            down, up, mean = random_FA_spread(df, randomScores, random_event_ids, key, 3)
             
-            # Simulate average routing behavior
-            avg_dec = simulate_roulette(scores, 1000, **kwargs)
+            # Simulate average routing behavior, comment since it's never used
+            #avg_dec = simulate_roulette(scores, 1000, **kwargs)
             
             # Plot efficiency comparison (ML vs random)
             plot_efficiencies(

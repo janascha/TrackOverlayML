@@ -132,7 +132,7 @@ def main():
     earlyStopping = EarlyStopping(
         monitor='val_loss',
         min_delta=0,
-        patience=20,
+        patience=args.patience,
         verbose=1,
         restore_best_weights=True
     )

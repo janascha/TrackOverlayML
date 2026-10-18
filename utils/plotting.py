@@ -382,7 +382,6 @@ def plot_scores(losses, testlabels, dir, logfile, track_threshold=None, track_qu
     
     # Draw fixed threshold determined from validation sample
     if track_threshold is not None:
-
         if track_quantile is not None:
             threshold_label = (
                 f"Validation {track_quantile:.0%} Diff quantile "
@@ -390,13 +389,7 @@ def plot_scores(losses, testlabels, dir, logfile, track_threshold=None, track_qu
             )
         else:
             threshold_label = f"Track threshold = {track_threshold:.3f}"
-    
-    ax.axvline(
-        track_threshold,
-        linestyle="--",
-        linewidth=2,
-        label=threshold_label
-    )
+        ax.axvline(track_threshold,linestyle="--",linewidth=2,label=threshold_label)
     
     ax.set_xlabel("Track classifier score")
     ax.set_ylabel("Arbitrary Units (Normalized)")

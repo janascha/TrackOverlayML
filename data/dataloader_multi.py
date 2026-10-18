@@ -80,11 +80,7 @@ def compute_pt(pt, myDistrances, mask, R, path, logfile=None):
     pt_matrix = np.where(myMask, np.nan, pt_matrix)
     pt_around_track = np.nansum(pt_matrix, axis=-1)
     pt_around_track = np.ma.masked_array(pt_around_track, mask=mask)
-    #pt_around_track = np.sum(pt[:, :, np.newaxis] * (distances < R), axis=2)
-    #distances_squared_masked = np.ma.masked_where(distances > R, distances)
     ## Calculate the sum of pT around the track
-    #pt_around_track = np.sum(pt_matrix * distances_squared_masked.mask, axis=1)
-    #pt_around_track = np.ma.masked_array(pt_around_track, mask=mask)
     pt_around_track = pt_around_track.compressed()
     return pt_around_track
 
@@ -185,7 +181,6 @@ def prepxRIMdata(path, logfile=None, isTraining=True, sample="JZ7W"):
     
     #Read and concatenate all CSV files
     #For every filename in pucsvlist, read that CSV into a Pandas DataFrame.
-    #
     pileup = pd.concat([pd.read_csv(csv) for csv in pucsvlist])
     print("pileup concatenated")
     nopileup = pd.concat([pd.read_csv(csv) for csv in wopucsvlist])
@@ -260,28 +255,7 @@ def prepxRIMdata(path, logfile=None, isTraining=True, sample="JZ7W"):
     assert np.allclose(nopileup["Px"].to_numpy(),pileup["Px"].to_numpy(),rtol=1e-7,atol=1e-10), \
     "Truth Px values misaligned. Check CSV creation"
     
-    #assert (
-    #    nopileup["EvtNumber"].values - pileup["EvtNumber"].values
-    #).sum() == 0, "Events Misalligned. Check CSV creation/AODs"
-    
-    #chat gpt says this is not a safe check. better would be
-    #assert np.array_equal( nopileup["EvtNumber"].values, pileup["EvtNumber"].values ), "Events misaligned. Check CSV creation."
-		#print("EvtNumber alignment check passed.")
-		#because np.array_equal(...) checks every element individually, rather than allowing positive and negative differences to cancel.
-    
-    #assert (
-    #    nopileup["PdgID"].values - pileup["PdgID"].values
-    #).sum() == 0, "Truths Misalligned. Check CSV creation"
-    
-    #assert np.array_equal(nopileup["PdgID"].values, pileup["PdgID"].values )
-        
-    '''assert (
-        nopileup["Px"].values - pileup["Px"].values
-    ).sum() == 0, "Truths Misalligned. Check CSV creation"
-    '''
-    
     # Now start the splicing process.
-
     pileup.reset_index(drop=True, inplace=True)
     nopileup.reset_index(drop=True, inplace=True)
     
@@ -452,12 +426,6 @@ def prepxRIMdata(path, logfile=None, isTraining=True, sample="JZ7W"):
     newData["sumpT02"] = scalar_pT_02
     newData["sumpT05"] = scalar_pT_05
     
-    #scalar_pT_02 = functools.reduce(operator.iconcat, scalar_pT_02, [])
-    #scalar_pT_05 = functools.reduce(operator.iconcat, scalar_pT_05, [])
-    #newData["sPT02"] = scalar_pT_02
-    #newData["sPT05"] = scalar_pT_05
-    # Save the data to a h5 file for later use.
-    
     #save the complete processed DataFrame
     newData.to_hdf(f"{path}/{sample}.h5", key="newData", format="t")
     print(
@@ -596,19 +564,8 @@ def loadTrainValTestData(path, logfile=None, sample="JZ7W", split=0.8, use_densi
     fullData_matched = pd.read_hdf(existinghpath_matched[0])   # TargetLabel = 1 -> Overlay methods DISAGREE
     fullData_unmatched = pd.read_hdf(existinghpath_unmatched[0]) # TargetLabel = 0 -> Overlay methods AGREE
     
-    # Sample if sizes specified
-    #If no sizes were specified, nothing happens and all data are retained.
-    #if sizes were specified, randomly select rows
-     
-    #if pos_sample_size is not None:
-    #    fullData_matched = fullData_matched.sample(n=min(pos_sample_size, len(fullData_matched)), random_state=42)
-    #if neg_sample_size is not None:
-    #    fullData_unmatched = fullData_unmatched.sample(n=min(neg_sample_size, len(fullData_unmatched)), random_state=42)
-    #print(f"Using matched: {fullData_matched.shape}, unmatched: {fullData_unmatched.shape}", file=logfile, flush=True)
-    
     # Combine and create dataset
-    #Combine the two classes again
-    #They need to be together because the ML dataset should contain both classes.
+    # They need to be together because the ML dataset should contain both classes.
     Data_concat = pd.concat([fullData_matched, fullData_unmatched], axis=0)
  
     if event_sample_size is not None:
@@ -635,21 +592,6 @@ def loadTrainValTestData(path, logfile=None, sample="JZ7W", split=0.8, use_densi
 
     feat_list = train_data.featureList
     
-    #Create the actual ML dataset
-    #xRIM_train = xRIMdataset(Data_concat, use_densities=use_densities, logfile=logfile)
-    #feat = xRIM_train.features
-    #labels = xRIM_train.labels
-    #feat_list = xRIM_train.featureList
-    #And xRIMdataset.getFeatures() performs the MinMax scaling that we saw earlier.
-    
-    #deal with class imbalance
-    # Compute class weights for imbalanced data
-    #false_classW = np.full(fullData_unmatched.shape[0], 0)
-    #true_classW = np.full(fullData_matched.shape[0], 1)
-    #mixed_Y = np.concatenate([true_classW, false_classW])
-    #unique_classes = np.unique(mixed_Y)
-    #unique_y = [0., 1.]
-    
     unique_classes = np.unique(L_train)
     class_weights = sklearn.utils.class_weight.compute_class_weight(class_weight="balanced", classes=unique_classes, y=L_train)
     classWeight = dict(zip(unique_classes, class_weights))
@@ -657,29 +599,10 @@ def loadTrainValTestData(path, logfile=None, sample="JZ7W", split=0.8, use_densi
     #This uses scikit-learn's standard "balanced" weighting.
     #classWeight = dict(zip(unique_y,sklearn.utils.class_weight.compute_class_weight('balanced', classes=unique_classes, y=mixed_Y)))
     
-    #Give every individual sample its weight
-    #a[0] → weight for TargetLabel 0
-    #a[1] → weight for TargetLabel 1
-    #a = list(classWeight.values())
-    #print(f"Class weights: NoDiff={a[0]:.4f}, Diff={a[1]:.4f}", file=logfile, flush=True)
-    # Assign weights to each sample
-    #W1 = np.where(labels == 0, a[0], labels)
-    #W = np.where(labels == 1, a[1], W1)
-    
     W_train = np.where(L_train == 0,classWeight[0],classWeight[1])
     W_val = np.where(L_val == 0,classWeight[0],classWeight[1])
     W_test = np.where(L_test == 0,classWeight[0],classWeight[1])
     
-    
-    # Train/test split ------------------------------------------------------
-    
-    #F_train, F_test, L_train, L_test, W_train, W_test = train_test_split(
-    #feat,labels,W,test_size=1-split,shuffle=True,random_state=1)
-
-    #F_train, F_test, L_train, L_test, W_train, W_test = train_test_split(
-    #    feat, labels, W, test_size=1-split, shuffle=True, random_state=1
-    #)
-    #print(f"Split complete - Train: {F_train.shape}, Test: {F_test.shape}", file=logfile, flush=True)
     
     scaler = MinMaxScaler()
     # Learn min/max ONLY from training data
@@ -689,8 +612,6 @@ def loadTrainValTestData(path, logfile=None, sample="JZ7W", split=0.8, use_densi
     F_val = scaler.transform(F_val)
     F_test = scaler.transform(F_test)
     
-    #return F_train, F_test, L_train, L_test, W_train, W_test, feat_list, scaler
-
     print(
         f"Split complete - "
         f"Train: {F_train.shape}, "
@@ -786,14 +707,6 @@ def loadEvaluationData(path, logfile=None, sample="JZ7W", use_densities=True, ev
     fullData_matched = pd.read_hdf(existinghpath_matched[0])
     fullData_unmatched = pd.read_hdf(existinghpath_unmatched[0])
     
-    # Sample if sizes specified
-    #optional subsampling, if sizes have been passed, say matched_size = 50,000, unmatched_size = 100,000
-    #if pos_sample_size is not None:
-    #    fullData_matched = fullData_matched.sample(n=min(pos_sample_size, len(fullData_matched)), random_state=42)
-    #if neg_sample_size is not None:
-    #    fullData_unmatched = fullData_unmatched.sample(n=min(neg_sample_size, len(fullData_unmatched)), random_state=42)
-    #print(f"Evaluation data: pos={fullData_matched.shape[0]}, neg={fullData_unmatched.shape[0]}", file=logfile, flush=True)
-    
     # Combine and create dataset
     #two classes are combined into one DataFrame again containing both labels
     Data_concat = pd.concat([fullData_matched, fullData_unmatched], axis=0)
@@ -818,8 +731,6 @@ def loadEvaluationData(path, logfile=None, sample="JZ7W", use_densities=True, ev
     feat_list = xRIM_eval.featureList #->names of the network inputs
     
     print(f"Evaluation features shape: {F_eval.shape}", file=logfile, flush=True)
-    
-    #data_concat then becomes df_eval in evaluate_model.py
     
     return F_eval, L_eval, feat_list, Data_concat
 

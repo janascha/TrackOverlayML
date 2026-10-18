@@ -22,6 +22,9 @@ import pandas as pd
 def main():
     args = get_args()
     
+     # Set random seed for reproducible evaluation
+    np.random.seed(args.seed)
+    
     datetimenow = datetime.datetime.now().strftime("%B %d, %Y: %H:%M:%S")
     
     # Data/eval config
@@ -111,8 +114,6 @@ def main():
     else:
         print(f"Evaluating independent sample {eval_sample}; using all events")
     
-    test_events = split_events["test"]
-    
     # You can specify sample sizes to limit evaluation, or None to use all data
     F_eval, L_eval, feat_list, df_eval = loadEvaluationData(
         path=path,logfile=None,sample=eval_sample,use_densities=use_density,event_ids=event_ids,event_sample_size=None )
@@ -146,15 +147,13 @@ def main():
         scaler = pickle.load(f)
     F_eval = scaler.transform(F_eval)
     
-
-    
     # Load training history if available
     history_path = f"{cl_dir}/history.pkl"
     if os.path.exists(history_path):
         with open(history_path, "rb") as f:
             history = pickle.load(f)
     else:
-        history = {}
+        history = None
         print(f"Warning: Training history not found at {history_path}")
     
     # Logging
@@ -196,10 +195,6 @@ def main():
     # Use the dataframe we already loaded
     print(f"Using loaded dataframe with {len(df_eval)} samples", file=logfile, flush=True)
     
-    # Create scalers for the evaluation data
-    #FS = MinMaxScaler()
-    #CS = MinMaxScaler()  # Dummy conditional scaler if needed
-    
     dec_kwargs = {
         "smoothing": temperature,
         "rouletter": roul_type
@@ -210,7 +205,6 @@ def main():
         trkPredictor,
         use_density,
         scaler,
-        #(FS, CS),
         sv_dir,
         xscore,
         args.evtmix,
