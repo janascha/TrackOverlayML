@@ -316,10 +316,11 @@ def plot_accuracy(history, dir, logfile):
     print("Plotting accuracy evolution", file=logfile, flush=True)
     
     fig, ax = plt.subplots()
-    ax.plot(history["accuracy"], label="Training Accuracy")
-    ax.plot(history["val_accuracy"], label="Validation Accuracy")
+    ax.plot(history["balanced_accuracy"],label="Training Balanced Accuracy")
+
+    ax.plot(history["val_balanced_accuracy"],label="Validation Balanced Accuracy")
     ax.set_xlabel("Epochs")
-    ax.set_ylabel("Accuracy")
+    ax.set_ylabel("Balanced Accuracy")
     ax.legend(frameon=False)
     ax.grid(True, alpha=0.3)
     

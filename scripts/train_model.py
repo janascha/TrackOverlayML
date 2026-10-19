@@ -18,6 +18,8 @@ from data.dataloader_multi import loadTrainValTestData
 from utils.args import get_args
 from utils.io import save_settings
 
+from utils.metrics import BalancedAccuracy
+
 
 def main():
     args = get_args()
@@ -110,7 +112,7 @@ def main():
     
     #architecture becomes configured for actual training
     #this tells Keras how that network should be trained
-    trkPredictor.compile(loss=loss, optimizer=optim, metrics=["accuracy"])
+    trkPredictor.compile(loss=loss, optimizer=optim, metrics=["accuracy",BalancedAccuracy()),weighted_metrics=[])
     
     #prints a Keras summary of the architecture into the training log, including the layer names, output shapes, and number of trainable parameters
     print(trkPredictor.summary(), file=logfile, flush=True)

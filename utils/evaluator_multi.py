@@ -741,10 +741,22 @@ def evaluate_performance(model, sv_dir, validation=None, feat=None, cond=None, l
     print("="*60, file=logfile, flush=True)
 
     # Evaluate model on test set
-    test_loss, test_acc = model.evaluate(feat, labels, verbose=2)
+    #test_loss, test_acc = model.evaluate(feat, labels, verbose=2)
+    #print(f"\nTest Loss: {test_loss:.4f}", file=logfile, flush=True)
+    #print(f"Test Accuracy: {test_acc:.4f} ({test_acc*100:.2f}%)", file=logfile, flush=True)
     
+    test_results = model.evaluate(feat,labels,verbose=2,return_dict=True)
+    test_loss = test_results["loss"]
+    test_acc = test_results["accuracy"]
+    test_bal_acc = test_results["balanced_accuracy"]
     print(f"\nTest Loss: {test_loss:.4f}", file=logfile, flush=True)
-    print(f"Test Accuracy: {test_acc:.4f} ({test_acc*100:.2f}%)", file=logfile, flush=True)
+    print(
+        f"Test Accuracy: {test_acc:.4f} "
+        f"({test_acc*100:.2f}%)",
+        file=logfile,flush=True)
+    print(
+        f"Test Balanced Accuracy: {test_bal_acc:.4f} "
+        f"({test_bal_acc*100:.2f}%)",file=logfile,flush=True    )
     
     # Get model predictions
     #NOTE THAT THESE ARE NOT LOSSES, They are the neural-network outputs — the sigmoid classifier scores

@@ -15,6 +15,7 @@ from data.dataloader_multi import loadEvaluationData
 from utils.evaluator_multi import evaluate_performance, evaluate_event, permutation_importance
 from utils.args import get_args
 from utils.plotting import plot_features
+from utils.metrics import BalancedAccuracy
 
 import glob
 import pandas as pd
@@ -139,7 +140,8 @@ def main():
     #sample identifies which trained classifier to load, while eval_sample identifies which dataset to test it on
     
     print(f"Loading model from {model_path}")
-    trkPredictor = keras.models.load_model(model_path)
+    #trkPredictor = keras.models.load_model(model_path)
+    trkPredictor = keras.models.load_model(model_path,custom_objects={"BalancedAccuracy": BalancedAccuracy})
     
     # Load the scaler
     scaler_path = f"{cl_dir}/scaler.pkl"
