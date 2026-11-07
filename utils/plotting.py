@@ -19,11 +19,139 @@ from statsmodels.stats.proportion import proportion_confint
 import matplotlib.patches as mpatches
 import warnings
 import mplhep as hep
-
+from matplotlib.colors import LogNorm
+from matplotlib.ticker import FuncFormatter
 
 # =============================================================================
 # Statistical Error Calculations
 # =============================================================================
+
+def plot_matchprob_logversion(df_full,output_dir):
+    print("2D plot of matchprob, log version")
+    
+    x = df_full["w_MatchProb"].to_numpy()
+    y = df_full["wo_MatchProb"].to_numpy()
+
+    # Keep only strictly positive values for log axes
+    mask = (x > 0) & (y > 0)
+    x = x[mask]
+    y = y[mask]
+
+    # Zoom range
+    xmin = 0.8
+    xmax = 1.0
+
+    # Keep only points in the zoomed region
+    mask_zoom = (x >= xmin) & (y >= xmin)
+    x = x[mask_zoom]
+    y = y[mask_zoom]
+
+    # Logarithmic binning in the zoomed region
+    xbins = np.logspace(np.log10(xmin), np.log10(xmax), 100)
+    ybins = np.logspace(np.log10(xmin), np.log10(xmax), 100)
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+
+    h = ax.hist2d(
+        x,
+        y,
+        bins=[xbins, ybins],
+        norm=LogNorm()
+    )
+
+    fig.colorbar(h[3], ax=ax, label="Number of tracks")
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(xmin, xmax)
+
+    ax.set_xlabel("MC Overlay MatchProb")
+    ax.set_ylabel("Track Overlay MatchProb")
+
+    # Diagonal
+    #ax.plot([xmin, xmax], [xmin, xmax], linestyle="--")
+
+    # hasMatch threshold
+    cut = 0.5
+    # only draw if it lies inside the visible range
+    if xmin <= cut <= xmax:
+        ax.axvline(cut, linestyle=":")
+        ax.axhline(cut, linestyle=":")
+
+    # Format axis tick labels as ordinary decimals
+    formatter = FuncFormatter(lambda val, pos: f"{val:.1f}")
+    ax.xaxis.set_major_formatter(formatter)
+    ax.yaxis.set_major_formatter(formatter)
+
+    fig.tight_layout()
+    fig.savefig(f"{output_dir}/matchprob_2D_logversion.pdf", bbox_inches="tight")
+    plt.close(fig)
+
+def plot_matchprob(df_full,output_dir):
+    print("2D plot of matchprob")
+    x = df_full["w_MatchProb"]
+    y = df_full["wo_MatchProb"]
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+
+    h = ax.hist2d(
+        x,
+        y,
+        bins=100,
+        range=[[0, 1], [0, 1]],
+        norm=LogNorm()
+    )
+
+    fig.colorbar(h[3], ax=ax, label="Number of tracks")
+
+    ax.set_xlabel("MC Overlay MatchProb")
+    ax.set_ylabel("Track Overlay MatchProb")
+
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+
+    # diagonal: identical MatchProb in both samples
+    #ax.plot([0, 1], [0, 1], linestyle="--")
+
+    # current hasMatch threshold
+    for cut, color in zip([0.5, 0.8, 0.9, 0.95, 0.99], ["darkred", "blue", "orange", "red", "pink"]):
+
+        # Quadrants
+        low_low   = np.sum((x <= cut) & (y <= cut))
+        low_high  = np.sum((x <= cut) & (y >  cut))
+        high_low  = np.sum((x >  cut) & (y <= cut))
+        high_high = np.sum((x >  cut) & (y >  cut))
+
+        # NoDiff = both on same side of the cut
+        n_nodiff = low_low + high_high
+
+        # Diff = on opposite sides of the cut
+        n_diff = low_high + high_low
+
+        ax.axvline(
+            cut,
+            color=color,
+            linestyle="-",
+            linewidth=0.8,
+            label=f"cut = {cut}:  Diff = {n_diff},  NoDiff = {n_nodiff}"
+        )
+
+        ax.axhline(
+            cut,
+            color=color,
+            linestyle="-",
+            linewidth=0.8
+        )
+
+    ax.legend()
+
+    fig.tight_layout()
+    fig.savefig(f"{output_dir}/matchprob_2D.pdf", bbox_inches="tight")
+    plt.close(fig)
+
+
 
 def plot_features(df, output_dir):
     print("Plotting input feature distributions")

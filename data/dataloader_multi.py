@@ -10,6 +10,7 @@ import functools
 import operator
 from numpy import argmax
 from sklearn.preprocessing import MinMaxScaler
+from utils.plotting import plot_features
 
 def split_by_event(df, train_fraction=0.8, random_state=1):
 
@@ -204,7 +205,8 @@ def prepxRIMdata(path, logfile=None, isTraining=True, sample="JZ7W"):
     
     pileup = pileup.sort_values(by=["EvtNumber", "Px"])
     
-    pileup["hasMatch"] = pileup["MatchProb"] > 0.5
+    pileup["hasMatch"] = pileup["MatchProb"] > 0.5               # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    
     pileup.columns = list(pileup.columns[:9]) + [
         "w_" + string for string in pileup.columns.values[9:]
     ]
@@ -218,12 +220,15 @@ def prepxRIMdata(path, logfile=None, isTraining=True, sample="JZ7W"):
     pileup["Phi"] = phi
     
     nopileup = nopileup.sort_values(by=["EvtNumber", "Px"])
-    nopileup["hasMatch"] = nopileup["MatchProb"] > 0.5
+    
+    nopileup["hasMatch"] = nopileup["MatchProb"] > 0.5             # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    
     nopileup.columns = list(nopileup.columns[:9]) + [
         "wo_" + string for string in nopileup.columns.values[9:]
     ]
     print(nopileup[["wo_hasMatch"]].head())
     print(nopileup.columns[9:])
+
 
     #The next logical step is where it finds events that exist in both samples and checks whether MC Overlay and Track Overlay are properly aligned.
     #Get unique eventIDs from the two samples - We would use this to match the pu and no pu data and tally
@@ -511,9 +516,58 @@ def prepareData(path, logfile=None, sample="JZ7W", use_densities=True):
     
     return fullData_matched, fullData_unmatched, feat_list
 
+def downsample_nodiff_to_diff(df, random_state=1, logfile=None):
 
-#def loadTrainTestData(path, logfile=None, sample="JZ7W", split=0.8, use_densities=True, pos_sample_size=None, neg_sample_size=None):
-def loadTrainValTestData(path, logfile=None, sample="JZ7W", split=0.8, use_densities=True, event_sample_size=None):
+    diff = df[df["TargetLabel"] == 1]
+    nodiff = df[df["TargetLabel"] == 0]
+
+    n_diff = len(diff)
+    n_nodiff = len(nodiff)
+
+    print(
+        f"Before downsampling: Diff={n_diff}, NoDiff={n_nodiff}",
+        file=logfile,
+        flush=True
+    )
+
+    if n_diff == 0:
+        raise ValueError("Training sample contains no Diff tracks.")
+
+    if n_nodiff < n_diff:
+        raise ValueError(
+            f"NoDiff sample ({n_nodiff}) is smaller than Diff sample ({n_diff})."
+        )
+
+    # Randomly select exactly as many NoDiff tracks as there are Diff tracks
+    nodiff_downsampled = nodiff.sample(
+        n=n_diff,
+        replace=False,
+        random_state=random_state
+    )
+
+    # Keep ALL Diff tracks
+    balanced = pd.concat(
+        [diff, nodiff_downsampled],
+        axis=0
+    )
+
+    # Shuffle so the classes are not stored sequentially
+    balanced = balanced.sample(
+        frac=1.0,
+        random_state=random_state
+    )
+
+    print(
+        f"After downsampling: "
+        f"Diff={(balanced['TargetLabel'] == 1).sum()}, "
+        f"NoDiff={(balanced['TargetLabel'] == 0).sum()}",
+        file=logfile,
+        flush=True
+    )
+
+    return balanced
+
+def loadTrainValTestData(path,logfile=None,sample="JZ7W",split=0.8,use_densities=True,event_sample_size=None,random_state=1,downsample_nodiff=False):
 
     """
     Load processed data and split into training and test sets with class balancing.
@@ -576,7 +630,17 @@ def loadTrainValTestData(path, logfile=None, sample="JZ7W", split=0.8, use_densi
         Data_concat = Data_concat[evt.isin(selected_events)]
  
     #NEW: Split into 3 samples
-    Data_train, Data_val, Data_test, split_events = split_by_event(Data_concat,train_fraction=split,random_state=1)
+    Data_train, Data_val, Data_test, split_events = split_by_event(Data_concat,train_fraction=split,random_state=random_state)
+    
+    if downsample_nodiff:
+        print(
+            "Downsampling NoDiff training sample to Diff statistics",
+            file=logfile,
+            flush=True
+        )
+        Data_train = downsample_nodiff_to_diff(Data_train,random_state=random_state,logfile=logfile)
+        # Plot the actual balanced training distributions
+        plot_features(Data_train,f"results/{sample}/classifier/plots_training_balanced")
     
     train_data = xRIMdataset(Data_train,use_densities=use_densities,logfile=logfile)
     val_data = xRIMdataset(Data_val,use_densities=use_densities,logfile=logfile)
@@ -599,9 +663,34 @@ def loadTrainValTestData(path, logfile=None, sample="JZ7W", split=0.8, use_densi
     #This uses scikit-learn's standard "balanced" weighting.
     #classWeight = dict(zip(unique_y,sklearn.utils.class_weight.compute_class_weight('balanced', classes=unique_classes, y=mixed_Y)))
     
-    W_train = np.where(L_train == 0,classWeight[0],classWeight[1])
-    W_val = np.where(L_val == 0,classWeight[0],classWeight[1])
-    W_test = np.where(L_test == 0,classWeight[0],classWeight[1])
+    if downsample_nodiff:
+        W_train = np.ones(len(L_train), dtype=float)
+
+    else:
+        unique_classes = np.unique(L_train)
+        class_weights = sklearn.utils.class_weight.compute_class_weight(
+            class_weight="balanced",
+            classes=unique_classes,
+            y=L_train
+        )
+        classWeight = dict(zip(unique_classes, class_weights))
+        W_train = np.where(
+            L_train == 0,
+            classWeight[0],
+            classWeight[1]
+        )
+    
+    #W_train = np.where(L_train == 0,classWeight[0],classWeight[1])
+    #W_val = np.where(L_val == 0,classWeight[0],classWeight[1])
+    #W_test = np.where(L_test == 0,classWeight[0],classWeight[1])    
+
+    #Training sample is already explicitly balanced
+    #W_train = np.ones(len(L_train), dtype=float)
+
+    # Validation/test retain their natural class imbalance.
+    # Balance their LOSS contributions.
+    W_val = get_balanced_weights(L_val)
+    W_test = get_balanced_weights(L_test)
     
     
     scaler = MinMaxScaler()
@@ -621,6 +710,23 @@ def loadTrainValTestData(path, logfile=None, sample="JZ7W", split=0.8, use_densi
         flush=True )
     
     return (F_train,F_val,F_test,L_train,L_val,L_test,W_train,W_val,W_test,feat_list,scaler,split_events)
+
+def get_balanced_weights(labels):
+
+    classes = np.unique(labels)
+
+    weights = sklearn.utils.class_weight.compute_class_weight(
+        class_weight="balanced",
+        classes=classes,
+        y=labels
+    )
+
+    weight_dict = dict(zip(classes, weights))
+
+    return np.array(
+        [weight_dict[label] for label in labels],
+        dtype=float
+    )
 
 def loadValidationData(path, logfile=None, sample="JZ7W", use_densities=True):
     """

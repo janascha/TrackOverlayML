@@ -27,6 +27,13 @@ def get_args():
         "-s", "--seed", type=int, default=23, help="Random seed for consistency"
     )
 
+    parser.add_argument(
+        "--downsample",
+        action="store_true",
+        default=False,
+        help="Randomly downsample the NoDiff training sample to the size of the Diff training sample.",
+    )
+    
     # Stats
     parser.add_argument(
         "--trainsplit",

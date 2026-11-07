@@ -29,6 +29,7 @@ def main():
     # Set seeds for reproducibility
     np.random.seed(args.seed)
     tf.random.set_seed(args.seed)
+    downsample_nodiff = args.downsample
     
     # Hyperparameters
     #Read the neural-network hyperparameters
@@ -82,7 +83,9 @@ def main():
         sample=sample,
         split=split,
         use_densities=use_density,
-        event_sample_size=None
+        event_sample_size=None,
+        random_state=args.seed,
+        downsample_nodiff=args.downsample
     )
     
     numFeatures = len(feat_list)
@@ -112,7 +115,7 @@ def main():
     
     #architecture becomes configured for actual training
     #this tells Keras how that network should be trained
-    trkPredictor.compile(loss=loss, optimizer=optim, metrics=["accuracy",BalancedAccuracy()),weighted_metrics=[])
+    trkPredictor.compile(loss=loss, optimizer=optim, metrics=["accuracy",BalancedAccuracy()],weighted_metrics=[])
     
     #prints a Keras summary of the architecture into the training log, including the layer names, output shapes, and number of trainable parameters
     print(trkPredictor.summary(), file=logfile, flush=True)

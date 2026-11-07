@@ -14,7 +14,7 @@ from sklearn.preprocessing import MinMaxScaler
 from data.dataloader_multi import loadEvaluationData
 from utils.evaluator_multi import evaluate_performance, evaluate_event, permutation_importance
 from utils.args import get_args
-from utils.plotting import plot_features
+from utils.plotting import plot_features, plot_matchprob, plot_matchprob_logversion
 from utils.metrics import BalancedAccuracy
 
 import glob
@@ -89,6 +89,88 @@ def main():
 
     print("Maximum E for NoDiff:", nodiff.max())
     print("Maximum E for Diff:", diff.max())
+
+    w09  = df_full["w_MatchProb"]  > 0.9
+    wo09 = df_full["wo_MatchProb"] > 0.9
+
+    w088  = df_full["w_MatchProb"]  > 0.88
+    wo088 = df_full["wo_MatchProb"] > 0.88
+
+    w086  = df_full["w_MatchProb"]  > 0.86
+    wo086 = df_full["wo_MatchProb"] > 0.86
+
+    w084  = df_full["w_MatchProb"]  > 0.84
+    wo084 = df_full["wo_MatchProb"] > 0.84
+
+    w082  = df_full["w_MatchProb"]  > 0.82
+    wo082 = df_full["wo_MatchProb"] > 0.82
+
+    w08  = df_full["w_MatchProb"]  > 0.8
+    wo08 = df_full["wo_MatchProb"] > 0.8
+
+    w07  = df_full["w_MatchProb"]  > 0.7
+    wo07 = df_full["wo_MatchProb"] > 0.7
+
+    w06  = df_full["w_MatchProb"]  > 0.6
+    wo06 = df_full["wo_MatchProb"] > 0.6
+
+    w05  = df_full["w_MatchProb"]  > 0.5
+    wo05 = df_full["wo_MatchProb"] > 0.5
+
+    w01  = df_full["w_MatchProb"]  > 0.1
+    wo01 = df_full["wo_MatchProb"] > 0.1
+
+    label09 = w09 != wo09
+    label088 = w088 != wo088
+    label086 = w086 != wo086
+    label084 = w084 != wo084
+    label082 = w082 != wo082
+    label08 = w08 != wo08
+    label07 = w07 != wo07
+    label06 = w06 != wo06
+    label05 = w05 != wo05
+    label01 = w01 != wo01
+
+    print("=======================================================================")
+    print("Diff with cut 0.9:", label09.sum())
+    print("Diff with cut 0.88:", label088.sum())
+    print("Diff with cut 0.86:", label086.sum())
+    print("Diff with cut 0.84:", label084.sum())
+    print("Diff with cut 0.82:", label082.sum())
+    print("Diff with cut 0.8:", label08.sum())
+    print("Diff with cut 0.7:", label07.sum())
+    print("Diff with cut 0.6:", label06.sum())
+    print("Diff with cut 0.5:", label05.sum())
+    print("Diff with cut 0.1:", label01.sum())
+    
+    base = (
+        (df_full["w_MatchProb"] > 0.5)
+        !=
+        (df_full["wo_MatchProb"] > 0.5)
+    )
+
+    for cut in [0.6, 0.7, 0.8, 0.82, 0.84, 0.86, 0.88, 0.9]:
+
+        label = (
+            (df_full["w_MatchProb"] > cut)
+            !=
+            (df_full["wo_MatchProb"] > cut)
+        )
+
+        diff_to_nodiff = np.sum(base & ~label)
+        nodiff_to_diff = np.sum(~base & label)
+
+        print(
+            f"cut={cut:.2f}  "
+            f"Diff->NoDiff={diff_to_nodiff:5d}  "
+            f"NoDiff->Diff={nodiff_to_diff:5d}"
+        )
+    
+    plot_matchprob(df_full,f"results/{sv_dir}/plots")
+    plot_matchprob_logversion(df_full,f"results/{sv_dir}/plots")
+    
+    #print("Tracks whose label changes:", (label05 != label03).sum())
+
     
     #classifier path
     cl_dir = f"results/{sample}/classifier"
